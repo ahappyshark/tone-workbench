@@ -2,6 +2,7 @@ import { useState } from 'react'
 import * as Tone from 'tone'
 import TransportControls from './components/TransportControls'
 import Visualizer from './components/Visualizer'
+import SynthPatch from './components/patches/SynthPatch'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -20,7 +21,7 @@ function App() {
         <>
           <TransportControls />
           <Visualizer />
-          <p>Workbench goes here</p>
+          <SynthPatch />
         </>
       }
     </div>
