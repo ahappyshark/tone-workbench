@@ -3,6 +3,7 @@ import * as Tone from 'tone'
 import TransportControls from './components/TransportControls'
 import Visualizer from './components/Visualizer'
 import SynthPatch from './components/patches/SynthPatch'
+import SequencerPatch from './components/patches/SequencerPatch'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -22,6 +23,7 @@ function App() {
           <TransportControls />
           <Visualizer />
           <SynthPatch />
+          <SequencerPatch />
         </>
       }
     </div>
