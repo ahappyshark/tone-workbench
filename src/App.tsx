@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import * as Tone from 'tone'
+import TransportControls from './components/TransportControls'
+import Visualizer from './components/Visualizer'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -14,7 +16,13 @@ function App() {
       {!started && 
         <button onClick={handleStart}>Start Audio</button>
       }
-      {started && <p>Workbench goes here</p>}
+      {started && 
+        <>
+          <TransportControls />
+          <Visualizer />
+          <p>Workbench goes here</p>
+        </>
+      }
     </div>
   )
 }
