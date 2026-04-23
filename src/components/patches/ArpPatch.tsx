@@ -3,8 +3,8 @@ import * as Tone from 'tone'
 import { masterGain } from '../../audio/master'
 
 const NOTE_MAP: Record<string, number> = {
-  'a': 60, 's': 62, 'd': 64, 'f': 65,
-  'g': 67, 'h': 69, 'j': 71, 'k': 72
+  'z': 60, 's': 61, 'x': 62, 'd': 63, 'c': 64, 'v': 65, 
+  'g': 66, 'b': 67, 'h': 68, 'n': 69, 'j': 70, 'm': 71, ',': 72
 }
 
 const midiToFreq = (midi: number) => Tone.Frequency(midi, 'midi').toFrequency()

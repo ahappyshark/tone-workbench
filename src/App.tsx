@@ -6,6 +6,7 @@ import SynthPatch from './components/patches/SynthPatch'
 import SequencerPatch from './components/patches/SequencerPatch'
 import PolyPatch from './components/patches/PolyPatch'
 import XYPatch from './components/patches/XYPatch'
+import ArpPatch from './components/patches/ArpPatch'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -24,9 +25,7 @@ function App() {
         <>
           <TransportControls />
           <Visualizer />
-          <SynthPatch />
-          <SequencerPatch />
-          <PolyPatch />
+          <ArpPatch />          
           <XYPatch />
         </>
       }
