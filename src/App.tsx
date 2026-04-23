@@ -5,6 +5,7 @@ import Visualizer from './components/Visualizer'
 import SynthPatch from './components/patches/SynthPatch'
 import SequencerPatch from './components/patches/SequencerPatch'
 import PolyPatch from './components/patches/PolyPatch'
+import XYPatch from './components/patches/XYPatch'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -26,6 +27,7 @@ function App() {
           <SynthPatch />
           <SequencerPatch />
           <PolyPatch />
+          <XYPatch />
         </>
       }
     </div>
