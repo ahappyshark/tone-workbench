@@ -4,6 +4,7 @@ import TransportControls from './components/TransportControls'
 import Visualizer from './components/Visualizer'
 import SynthPatch from './components/patches/SynthPatch'
 import SequencerPatch from './components/patches/SequencerPatch'
+import PolyPatch from './components/patches/PolyPatch'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -24,6 +25,7 @@ function App() {
           <Visualizer />
           <SynthPatch />
           <SequencerPatch />
+          <PolyPatch />
         </>
       }
     </div>
