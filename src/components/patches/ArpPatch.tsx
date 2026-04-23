@@ -42,11 +42,13 @@ function ArpPatch() {
 
     const reverb = new Tone.Reverb({ decay: 3, wet: 0.4 })
     const delay = new Tone.FeedbackDelay('8n.', 0.3)
+    const denseDelay = new Tone.FeedbackDelay('8n.', 0.7)
 
     synth.connect(delay)
     delay.connect(reverb)
     reverb.connect(masterGain)
 
+    denseDelay.connect(reverb)
     ghost.connect(reverb)
 
     synthRef.current = synth
@@ -60,7 +62,7 @@ function ArpPatch() {
       behaviorCountRef.current++
       if (behaviorCountRef.current > 4 && Math.random() < 0.15) {
         behaviorCountRef.current = 0
-        const behaviors: Behavior[] = ['normal', 'normal', 'retrograde', 'halftime', 'doubletime']
+        const behaviors: Behavior[] = ['normal', 'normal', 'retrograde']
         const next = behaviors[Math.floor(Math.random() * behaviors.length)]
         behaviorRef.current = next
         setBehavior(next)
@@ -78,22 +80,41 @@ function ArpPatch() {
         ? [...notes].reverse()
         : notes
 
-      const step = stepRef.current % pattern.length
-      let midi = pattern[step]
+      // const step = stepRef.current % pattern.length
+      // let midi = pattern[step]
+      let midi = pattern[Math.floor(Math.random() * pattern.length)]
+      
 
-      // random octave displacement
-      if (Math.random() < 0.1) {
-        midi += Math.random() < 0.5 ? 12 : -12
-      }
+      
 
       // random rest
-      if (Math.random() < 0.1) {
-        stepRef.current++
+      if (Math.random() < 0.2) {
+        // stepRef.current++
         return
       }
 
-      const freq = midiToFreq(midi)
-      synth.triggerAttackRelease(freq, '32n', time)
+      // random octave displacement
+      // if (Math.random() < 0.1) {
+      //   midi += Math.random() < 0.5 ? 12 : -12
+      // }
+
+      const displaced = Math.random() < 0.1
+      if (displaced) {
+        midi += Math.random() < 0.5 ? 12 : -12
+        const freq = midiToFreq(midi)
+        const tempSynth = new Tone.Synth({
+          volume: -16,
+          oscillator: { type: 'triangle' },
+          envelope: { attack: 0.01, decay: 0.1, sustain: 0.2, release: 0.6 }
+        }).connect(denseDelay)
+        tempSynth.triggerAttackRelease(freq, '32n', time)
+        setTimeout(() => tempSynth.dispose(), 4000)
+      } else {
+        synth.triggerAttackRelease(midiToFreq(midi), '32n', time)
+      }
+
+      // const freq = midiToFreq(midi)
+      // synth.triggerAttackRelease(freq, '32n', time)
       setLastNote(midiToNote(midi))
 
       // ghost note: perfect 5th up, slightly late
@@ -102,7 +123,7 @@ function ArpPatch() {
         ghost.triggerAttackRelease(midiToFreq(ghostMidi), '32n', time + 0.04)
       }
 
-      stepRef.current++
+      // stepRef.current++
     }, '16n')
 
     loop.start(0)
