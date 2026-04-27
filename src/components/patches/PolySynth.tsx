@@ -51,8 +51,8 @@ function PolySynth() {
     }, [])
 
     useRegisterParam('PolySynth', () => ({
-        filterCutoff: { label: 'Filter Cutoff', signal: filterRef.current!.frequency },
-        filterRes: { label: 'Filter Resonance', signal: filterRef.current!.Q },
+        filterCutoff: { label: 'Filter Cutoff', signal: filterRef.current!.frequency, min: 100, max: 10000 },
+        filterRes: { label: 'Filter Resonance', signal: filterRef.current!.Q, min: 0.1, max: 20 },
     }), loaded)
 
     const handleAdsr = (key: keyof ADSRState) => (value: number) => {

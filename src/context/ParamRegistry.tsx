@@ -5,6 +5,8 @@ import * as Tone from 'tone'
 export interface RegisteredParam { 
     label: string
     signal: Tone.ToneAudioNode | Tone.Signal<any> | Tone.Param<any>
+    min?: number
+    max?: number
 }
 
 interface ParamRegistryContextType {

@@ -21,6 +21,7 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
   const [max, setMax] = useState(1)
   const [target, setTarget] = useState<string>('')
   const [running, setRunning] = useState(false)
+  const [paramRange, setParamRange] = useState<{ min: number, max: number } | null>(null)
 
   useEffect(() => {
     const lfo = new Tone.LFO({
@@ -76,6 +77,14 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
       if (entry) {
         lfo.connect(entry.signal as any)
         currentTargetRef.current = newTarget
+
+        if (entry.min !== undefined && entry.max !== undefined) {
+          setParamRange({ min: entry.min, max: entry.max })
+          setMin(entry.min)
+          setMax(entry.max)
+          lfo.min = entry.min
+          lfo.max = entry.max
+        }
       }
     } else {
       currentTargetRef.current = null
@@ -160,8 +169,8 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
         />
         <Knob
           label="Min"
-          min={-10000}
-          max={10000}
+          min={paramRange?.min ?? -10000}
+          max={paramRange?.max ?? 10000}
           value={min}
           defaultValue={0}
           onChange={handleMin}
@@ -170,8 +179,8 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
         />
         <Knob
           label="Max"
-          min={-10000}
-          max={10000}
+          min={paramRange?.min ?? -10000}
+          max={paramRange?.max ?? 10000}
           value={max}
           defaultValue={1}
           onChange={handleMax}

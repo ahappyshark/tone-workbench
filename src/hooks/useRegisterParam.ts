@@ -5,6 +5,8 @@ import { useParamRegistry } from "../context/ParamRegistry";
 interface ParamEntry {
     label: string
     signal: Tone.ToneAudioNode | Tone.Signal<any> | Tone.Param<any>
+    min?: number
+    max?: number
 }
 
 export function useRegisterParam(
