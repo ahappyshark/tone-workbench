@@ -6,6 +6,7 @@ interface SliderProps {
   max: number
   value: number
   onChange: (value: number) => void
+  defaultValue?: number
   orientation?: 'vertical' | 'horizontal'
   length?: number
   color?: string
@@ -17,6 +18,7 @@ function Slider({
   max,
   value,
   onChange,
+  defaultValue,
   orientation = 'vertical',
   length = 120,
   color = '#00ff88'
@@ -132,6 +134,12 @@ function Slider({
     dragRef.current = null
   }, [])
 
+  const onDoubleClick = useCallback(() =>{
+        if (defaultValue !== undefined) {
+            onChange(defaultValue)
+        }
+    }, [defaultValue, onChange])
+
   return (
     <div style={{
       display: 'flex',
@@ -151,6 +159,7 @@ function Slider({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerUp}
+        onDoubleClick={onDoubleClick}
       >
         <div style={trackStyle} />
         <div style={fillStyle} />

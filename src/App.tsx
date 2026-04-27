@@ -7,6 +7,9 @@ import SequencerPatch from './components/patches/SequencerPatch'
 import PolyPatch from './components/patches/PolyPatch'
 import XYPatch from './components/patches/XYPatch'
 import ArpPatch from './components/patches/ArpPatch'
+import SynthTestPatch from './components/patches/SynthTestPatch'
+import GrainPatch from './components/patches/GrainPatch'
+import PolySynth from './components/patches/PolySynth'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -24,9 +27,9 @@ function App() {
       {started && 
         <>
           <TransportControls />
-          <Visualizer />
-          <ArpPatch />          
-          <XYPatch />
+          <Visualizer />          
+          <PolySynth />
+          
         </>
       }
     </div>

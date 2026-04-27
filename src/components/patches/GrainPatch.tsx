@@ -25,7 +25,9 @@ function GrainPatch() {
     const reverb = new Tone.Reverb({ decay: 4, wet: 0.5 })
     reverb.connect(masterGain)
     reverbRef.current = reverb
-    return () => reverb.dispose()
+    return () => {
+      reverb.dispose()
+    }
   }, [])
 
   useEffect(() => {
@@ -49,7 +51,9 @@ function GrainPatch() {
     player.connect(reverbRef.current!)
     playerRef.current = player
 
-    return () => player.dispose()
+    return () => {
+      player.dispose()
+    }
   }, [fileUrl])
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -107,7 +111,7 @@ function GrainPatch() {
           <div style={{ display: 'flex', gap: 12 }}>
             <Knob label="Grain Size" min={0.01} max={1} value={params.grainSize} onChange={handleParam('grainSize')} />
             <Knob label="Overlap" min={0.01} max={0.5} value={params.overlap} onChange={handleParam('overlap')} color="#ff8800" />
-            <Knob label="Playback" min={-2} max={2} value={params.playbackRate} onChange={handleParam('playbackRate')} color="#ffff00" />
+            <Knob label="Playback" min={0.001} max={2} value={params.playbackRate} onChange={handleParam('playbackRate')} color="#ffff00" />
           </div>
         </div>
 

@@ -6,6 +6,7 @@ interface KnobProps {
     max: number
     value: number
     onChange: (value: number) => void
+    defaultValue?: number
     size?: number
     color?: string
 }
@@ -33,12 +34,15 @@ function describeArc(cx: number, cy: number, r: number, startAngle: number, endA
     return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`
 }
 
+
+
 function Knob({
     label,
     min,
     max,
     value,
     onChange,
+    defaultValue,
     size = 60,
     color = '#00ff88'
 }: KnobProps) {
@@ -69,6 +73,12 @@ function Knob({
         dragRef.current = null
     }, [])
 
+    const onDoubleClick = useCallback(() =>{
+        if (defaultValue !== undefined) {
+            onChange(defaultValue)
+        }
+    }, [defaultValue, onChange])
+
     return (
         <div style={{
             display: 'flex',
@@ -85,6 +95,7 @@ function Knob({
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onPointerLeave={onPointerUp}
+                onDoubleClick={onDoubleClick}
             >
                 <path
                     d={trackPath}
