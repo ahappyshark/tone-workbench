@@ -32,7 +32,9 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
 
     lfoRef.current = lfo
 
-    return () => lfo.dispose()
+    return () => {
+      lfo.dispose()
+    }
   }, [])
 
   const handleWaveform = (w: WaveformType) => {

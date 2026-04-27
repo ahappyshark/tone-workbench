@@ -10,6 +10,7 @@ import ArpPatch from './components/patches/ArpPatch'
 import SynthTestPatch from './components/patches/SynthTestPatch'
 import GrainPatch from './components/patches/GrainPatch'
 import PolySynth from './components/patches/PolySynth'
+import LFORack from './components/LFORack'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -29,7 +30,7 @@ function App() {
           <TransportControls />
           <Visualizer />          
           <PolySynth />
-          
+          <LFORack />
         </>
       }
     </div>
