@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as Tone from 'tone'
 import { masterGain } from "../../audio/master";
 import { useMidi } from "../../hooks/useMidi";
@@ -62,13 +62,13 @@ function PolySynth() {
         filterRef.current?.set({ Q: value })
     }
 
-    const handleNoteOn = (midi: number, velocity: number) => {
+    const handleNoteOn = useCallback((midi: number, velocity: number) => {
         synthRef.current?.triggerAttack(Tone.Frequency(midi, 'midi').toFrequency())
-    }
+    }, [])
 
-    const handleNoteOff = (midi: number) => {
+    const handleNoteOff = useCallback((midi: number) => {
         synthRef.current?.triggerRelease(Tone.Frequency(midi, 'midi').toFrequency())
-    }
+    }, [])
 
     useMidi({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff })
     useKeyboard({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff })
