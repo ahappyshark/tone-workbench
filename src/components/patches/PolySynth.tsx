@@ -4,6 +4,7 @@ import { masterGain } from "../../audio/master";
 import { useMidi } from "../../hooks/useMidi";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import Knob from "../controls/Knob";
+import { useRegisterParam } from "../../hooks/useRegisterParam";
 
 interface ADSRState {
     attack: number
@@ -13,6 +14,8 @@ interface ADSRState {
 }
 
 function PolySynth() {
+    const [loaded, setLoaded] = useState(false)
+
     const synthRef = useRef<Tone.PolySynth | null>(null)
     const [adsr, setAdsr] = useState<ADSRState>({
         attack: 0.05,
@@ -24,6 +27,8 @@ function PolySynth() {
     const [filterCutoff, setFilterCutoff] = useState(4000)
     const [filterRes, setFilterRes] = useState(1)
     const filterRef = useRef<Tone.Filter | null>(null)
+
+    
 
     useEffect(() => {
         const filter = new Tone.Filter(4000, 'lowpass')
@@ -37,12 +42,18 @@ function PolySynth() {
         filter.connect(masterGain)
         synthRef.current = synth
         filterRef.current = filter
+        setLoaded(true)
 
         return () => {
             synth.dispose()
             filter.dispose()
         }
     }, [])
+
+    useRegisterParam('PolySynth', () => ({
+        filterCutoff: { label: 'Filter Cutoff', signal: filterRef.current!.frequency },
+        filterRes: { label: 'Filter Resonance', signal: filterRef.current!.Q },
+    }), loaded)
 
     const handleAdsr = (key: keyof ADSRState) => (value: number) => {
         setAdsr(prev => {
@@ -52,15 +63,15 @@ function PolySynth() {
         })
     }
 
-    const handleCutoff = (value: number) => {
+    const handleCutoff = useCallback((value: number) => {
         setFilterCutoff(value)
         filterRef.current?.frequency.rampTo(value, 0.02)
-    }
+    }, [])
 
-    const handleRes = (value: number) => {
+    const handleRes = useCallback((value: number) => {
         setFilterRes(value)
         filterRef.current?.set({ Q: value })
-    }
+    }, [])
 
     const handleNoteOn = useCallback((midi: number, velocity: number) => {
         synthRef.current?.triggerAttack(Tone.Frequency(midi, 'midi').toFrequency())
