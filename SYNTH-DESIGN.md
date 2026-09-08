@@ -54,8 +54,15 @@ want and eight reverbs will melt the audio thread.
 
 ## Voice pool
 
-A fixed array of `N` voices (default 8), each owning its own node graph, built
-once at load and never rebuilt. Note-on grabs one; note-off releases it.
+A fixed array of 16 voices, each owning its own node graph, built once at load
+and never rebuilt. A note claims a **group** of one or more voices; note-off
+releases the whole group.
+
+The pool is fixed for two software reasons, not to imitate hardware. Creating
+audio nodes during playback causes clicks, so the pool is allocated once and
+never touched in the hot path. And unbounded allocation on a fast trill would
+saturate the audio thread. 16 rather than 8 because unison eats voices — at 8,
+a 4-voice unison patch can only play two notes at a time.
 
 ```ts
 class Voice {
@@ -73,17 +80,54 @@ class Voice {
 }
 ```
 
-**Allocation.** Note-on: first idle voice, else the oldest *releasing* voice,
-else the oldest held voice. Note-off: `triggerRelease`, mark releasing, keep it
-claimable. A `Map<number, Voice>` tracks note → voice so note-off finds its
-voice in O(1) and repeated note-on of the same pitch retriggers rather than
-stacking.
+**Allocation.** Note-on claims `unison` voices at once: idle voices first, then
+the oldest *releasing* group, then the oldest held group. Groups are stolen
+whole — never split, or a chord loses half a note and the detune collapses.
+Note-off calls `triggerRelease` on every voice in the group and marks it
+releasing but still claimable. A `Map<number, Voice[]>` tracks note → group, so
+note-off is O(1) and repeating a held pitch retriggers its group rather than
+stacking a second one.
+
+Within a group, voice *i* of *n* gets a detune offset spread across
+±`detune` cents and a pan position spread across ±`spread`. A group of one
+sits at zero detune and centre pan, so `unison: 1` costs nothing.
 
 **Why this and not `Tone.PolySynth`.** PolySynth allocates internally and hands
 you a `.set()` on the whole pool. It cannot do per-voice modulation, per-voice
 unison detune, or velocity routed anywhere except amplitude — because you never
-get a handle on a voice. Owning the pool is ~150 lines and it is the thing that
+get a handle on a voice. Owning the pool is ~200 lines and it is the thing that
 unlocks the rest of this document.
+
+**Why groups rather than `fat*` oscillators.** `Tone.OmniOscillator`'s `fat*`
+types give detuned copies *inside one oscillator node*, summed before the
+filter — so all copies share one filter and one envelope, and the node is mono.
+Stacking real voices gives each copy its own filter (so per-voice LFOs make each
+one drift independently), its own envelope, and its own pan position. That
+difference is most of what "lush evolving pad" means, which is half the ambient
+variant's job.
+
+The cost is that stacking consumes polyphony, which is the trade the `unison`
+control exposes. `fat*` types stay available as oscillator types — they're free
+with `OmniOscillator` and useful as a cheap thickener — but they are not the
+unison feature.
+
+### Voice mode
+
+Group allocation and mono/poly are the same subsystem, so they live together:
+
+```ts
+voice: {
+  mode: 'poly' | 'mono' | 'legato'
+  glide: number      // portamento seconds; legato glides only on overlap
+  unison: number     // voices per note, 1 = off
+  detune: number     // cents spread across the group
+  spread: number     // stereo spread, 0..1
+}
+```
+
+`poly` + `unison: 1` is 16 notes. `poly` + `unison: 4` is 4 notes. `mono` +
+`unison: 8` is one very large note — the classic stacked bass, and it falls out
+of the same code rather than needing a special case.
 
 **Nodes are never recreated.** Changing oscillator type mutates
 `osc.type`; changing voice count is the only operation that rebuilds, and it
@@ -216,9 +260,9 @@ Each phase should end with something audible.
 
 | # | Phase | Contains | Rough size |
 |---|---|---|---|
-| 1 | **Voice pool** | `Voice`, allocator, stealing, 2 osc + sub + noise, filter, amp + mod envelope. Replaces `Tone.PolySynth` entirely. | ~450 lines |
+| 1 | **Voice pool** | `Voice`, group allocator, stealing, unison/detune/spread, 2 osc + sub + noise, filter, amp + mod envelope. Replaces `Tone.PolySynth` entirely. | ~550 lines |
 | 2 | **Mod matrix** | Destination descriptors, routes, depth gains, `detune` routing, per-voice LFOs. Retires the LFO target dropdown. | ~300 lines |
-| 3 | **Playability** | Unison via `fat*` + `Tone.StereoWidener`, glide, poly/mono/legato, velocity routing. | small |
+| 3 | **Playability** | Glide, mono/legato note priority, velocity routing. Unison itself lands in phase 1 with the allocator. | small |
 | 4 | **Effects chain** | Drive/waveshaper, chorus, delay, reverb, wet knobs, as patch state. | ~250 lines |
 | 5 | **Variants** | `Shark Ambient` and `Shark Aggro` preset packs. Generative sequencer for the ambient one (`SequencerPatch` and `ArpPatch` are the seed — OPEN-QUESTIONS #8). | data + one module |
 

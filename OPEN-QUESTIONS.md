@@ -181,24 +181,45 @@ would type it properly. Low value until the mod matrix exists.
 
 Raised by `SYNTH-DESIGN.md`. These only become live once phase 1 starts.
 
-### 14. Voice count: fixed, or user-facing? — **OPEN**
+### 14. Voice count: fixed, or user-facing? — **DECIDED (fixed at 16)**
 
-Default 8. Changing it is the one operation that must rebuild the whole pool,
-so it can't be a knob you sweep during playback — it needs to be a discrete
-setting that stops all voices first. Is it patch state (a pad wants 8, a bass
-wants 1) or an app-level preference? Leaning patch state, since the variants
-will disagree about it.
+Pool size is a constant, not a control. Changing it is the one operation that
+must rebuild the whole pool, and rebuilding audio nodes during playback clicks.
 
-### 15. Is unison `fat*` oscillators, or real per-voice stacking? — **OPEN**
+16 rather than 8 because unison consumes voices (#15): at 8, a 4-voice unison
+patch could only play two notes.
 
-`Tone.OmniOscillator`'s `fat*` types give `count` detuned copies with a
-`spread`, for free, inside one node. Real per-voice stacking (N voices per note,
-each with its own filter and envelope) sounds better and costs N× the voices
-plus a much more complicated allocator.
+What *is* per-patch is **voice mode** — `poly` / `mono` / `legato` — which is
+the same allocator as unison and lives in the same `voice` block. That covers
+the actual musical want (this patch is a mono bass, that one is a pad) without
+exposing pool size.
 
-Leaning `fat*` plus a `Tone.StereoWidener` for width — it's most of the sound
-for a fraction of the work, and `FatOscillator` is mono so width needs solving
-either way. Revisit if the ambient variant sounds thin.
+### 15. Unison: `fat*` oscillators or real voice stacking? — **DECIDED (stacking)**
+
+This was posed wrong. The question isn't which technique to use, it's one level
+up and genuinely architectural:
+
+> **Can a single note claim more than one voice?**
+
+That's an allocator property. Build it in and the unison count is just a number
+that can be patch state for free; leave it out and adding it later rewrites the
+hot path. So: **the allocator hands out groups of voices**, and `unison` is a
+per-patch control.
+
+The audible difference, for the record. `fat*` sums detuned copies *inside one
+oscillator node*, before the filter — so every copy shares one filter, one
+envelope, and the node is mono. Stacking real voices gives each copy its own
+filter (so per-voice LFOs let each drift independently), its own envelope, and
+its own pan. That independent-filter drift is most of what "lush evolving pad"
+means, which is half the ambient variant's job. `fat*` gets maybe 80% of the
+way for a fraction of the cost; the missing 20% is exactly the part that
+matters here.
+
+`fat*` types stay available as oscillator types — free with `OmniOscillator`,
+useful as a cheap thickener — they're just not the unison feature.
+
+Cost: unison eats polyphony, which is the trade the control exposes and the
+reason the pool is 16 (#14).
 
 ### 16. Does the mod matrix get a UI, or stay a list? — **OPEN**
 
@@ -215,3 +236,11 @@ for ambient is the obvious candidate. If so it's an *optional module in one
 engine* (a flag in `PatchState`), never a second engine. Worth checking after
 phase 4 whether the packs actually sound distinct, or whether the engine is
 missing something that only one of them needs.
+
+### 18. Mono/legato note priority — **OPEN**
+
+`mode: 'mono' | 'legato'` needs a note-priority rule for what happens when you
+release one of two held keys: last-note, low-note, or high-note priority. They
+sound meaningfully different under a trill and every hardware mono synth picks
+one. Default to last-note (most intuitive on a keyboard); worth exposing per
+patch only if a variant actually wants otherwise.
