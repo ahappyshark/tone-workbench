@@ -76,12 +76,14 @@ strategy is `coercePatch()`: unknown fields are dropped, missing fields take
 their default. That's genuinely sufficient for *additive* changes — an old
 preset loaded into a newer app just gets defaults for the new controls.
 
-It is **not** sufficient for renames or unit changes. That case is no longer
-hypothetical: phase 1 of `SYNTH-DESIGN.md` moves `attack`/`decay`/`sustain`/
-`release` under `ampEnv` and `filterCutoff`/`filterRes` under `filter`. That's
-a rename, so **v2 needs a real `if (raw.version < 2)` branch** remapping the
-flat fields before coercion. Units stay in Hz and seconds, so it's a pure field
-move — write it when phase 1 lands, not after.
+It is **not** sufficient for renames or unit changes. Phase 1 of
+`SYNTH-DESIGN.md` moves the ADSR under `ampEnv` and cutoff/res under `filter`,
+which is exactly that case — but **no presets exist yet**, so there is nothing
+to migrate and phase 1 simply bumps `PATCH_VERSION` with no migration branch.
+
+The first migration will be the first schema change made *after* real presets
+exist. Keep the version field bumping honestly until then, so that when the day
+comes the branch has something to key on.
 
 ### 5. Factory presets — **OPEN**
 
@@ -111,17 +113,18 @@ effects ever land (see the synth expansion), they *are* patch state.
 
 ## Architecture
 
-### 8. Seven parked patch components — **OPEN**
+### 8. Seven parked patch components — **DECIDED (sandboxed)**
 
-`SynthPatch`, `PolyPatch`, `ArpPatch`, `XYPatch`, `GrainPatch`,
-`SequencerPatch`, `SynthTestPatch` are still imported in `App.tsx` but never
-rendered, which is what makes `npm run build` fail (see #11). They are not
-worthless — `XYPatch` already has working FM, AM and pulse-width configs, and
-`GrainPatch` has a file-loading granular player.
+Moved to `src/sandbox/`, excluded from `tsconfig.app.json` and
+`eslint.config.js`, with a README noting what each one proved. They were
+probes at Tone.js features rather than app components, and several are worth
+harvesting — `XYPatch`'s FM/AM/pulse-width configs feed straight into the
+oscillator design, and `SequencerPatch`/`ArpPatch` are the seed for the ambient
+variant's generative module.
 
-Options: delete them; move them to a `sandbox/` excluded from the build; or
-harvest the good parts into the main synth and then delete. The imports should
-come out of `App.tsx` either way.
+`XYController` and `Slider` went with them (nothing else used either).
+`PolySynth` was the only survivor of `components/patches/`, so it moved up to
+`components/` and the directory is gone.
 
 ### 9. One global patch, or many instruments? — **DEFERRED**
 
@@ -154,12 +157,23 @@ Same component, smaller: no fine-drag modifier (shift = 10× precision), no
 keyboard or ARIA support, and `onPointerLeave` ends a drag, so dragging past
 the window edge drops the knob.
 
-### 11. `npm run build` is red — **OPEN**
+### 11. `npm run build` is red — **FIXED**
 
-15 TypeScript errors, none from the preset work. Unused imports in `App.tsx`
-(#8), `XYController`, `ArpPatch` — plus four real ones in `useMidi.ts`:
-`port` is possibly null in three places and `Uint8Array | null` isn't
-iterable. That last group will actually bite with a real controller attached.
+Green as of the sandbox move. Most of the 15 errors were the parked patches
+(#8); the four real ones were in `useMidi.ts` and are fixed properly rather
+than cast away:
+
+- `e.data` is nullable per the Web MIDI spec, and sysex messages exceed three
+  bytes — messages shorter than a channel message are now ignored instead of
+  destructured blindly.
+- `e.port` is nullable on `statechange`; guarded, and re-plugged devices are
+  de-duplicated instead of stacking a second listener.
+- `requestMIDIAccess()` could resolve after unmount and attach listeners to a
+  torn-down effect. Now guarded by a `cancelled` flag, and `onstatechange` is
+  cleared on cleanup.
+
+Lint is down to four errors, all in files the synth engine rewrites
+(`PolySynth`, `ParamRegistry`, `useRegisterParam`).
 
 ### 12. `useRegisterParam` only depends on `ready` — **OPEN**
 

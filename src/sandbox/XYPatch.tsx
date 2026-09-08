@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Tone from 'tone'
-import { masterGain } from '../../audio/master'
+import { masterGain } from '../audio/master'
 
 const SCALE = ['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4']
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as Tone from 'tone'
-import { masterGain } from "../../audio/master";
+import { masterGain } from "../audio/master";
 
 const NOTE_COLOR_MAP: Record<string, string> = {
     'C4': '#FF0000',

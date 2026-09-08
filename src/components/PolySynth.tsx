@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Tone from 'tone'
-import { masterGain } from "../../audio/master";
-import { useMidi } from "../../hooks/useMidi";
-import { useKeyboard } from "../../hooks/useKeyboard";
-import Knob from "../controls/Knob";
-import { useRegisterParam } from "../../hooks/useRegisterParam";
-import { getPatch, setSynthParam, useSynthState } from "../../state/patchStore";
-import { OSC_TYPES, SYNTH_RANGES, DEFAULT_SYNTH, FILTER_TYPES, type OscType, type FilterType } from "../../audio/patchTypes";
+import { masterGain } from "../audio/master";
+import { useMidi } from "../hooks/useMidi";
+import { useKeyboard } from "../hooks/useKeyboard";
+import Knob from "./controls/Knob";
+import { useRegisterParam } from "../hooks/useRegisterParam";
+import { getPatch, setSynthParam, useSynthState } from "../state/patchStore";
+import { OSC_TYPES, SYNTH_RANGES, DEFAULT_SYNTH, FILTER_TYPES, type OscType, type FilterType } from "../audio/patchTypes";
 
 function PolySynth() {
     const [loaded, setLoaded] = useState(false)

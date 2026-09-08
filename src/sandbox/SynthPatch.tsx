@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as Tone from "tone";
-import { masterGain } from "../../audio/master";
+import { masterGain } from "../audio/master";
 
 function SynthPatch() {
     const synthRef = useRef<Tone.Synth | null>(null)
