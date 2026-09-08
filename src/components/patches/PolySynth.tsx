@@ -5,75 +5,79 @@ import { useMidi } from "../../hooks/useMidi";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import Knob from "../controls/Knob";
 import { useRegisterParam } from "../../hooks/useRegisterParam";
-
-interface ADSRState {
-    attack: number
-    decay: number
-    sustain: number
-    release: number
-}
+import { getPatch, setSynthParam, useSynthState } from "../../state/patchStore";
+import { OSC_TYPES, SYNTH_RANGES, DEFAULT_SYNTH, FILTER_TYPES, type OscType, type FilterType } from "../../audio/patchTypes";
 
 function PolySynth() {
     const [loaded, setLoaded] = useState(false)
 
     const synthRef = useRef<Tone.PolySynth | null>(null)
-    const [adsr, setAdsr] = useState<ADSRState>({
-        attack: 0.05,
-        decay: 0.2,
-        sustain: 0.5,
-        release: 0.8
-    })
-
-    const [filterCutoff, setFilterCutoff] = useState(4000)
-    const [filterRes, setFilterRes] = useState(1)
     const filterRef = useRef<Tone.Filter | null>(null)
 
-    
+    // The patch is the source of truth; the Tone nodes are downstream of it.
+    const synth = useSynthState()
 
     useEffect(() => {
-        const filter = new Tone.Filter(4000, 'lowpass')
-        const synth = new Tone.PolySynth(Tone.Synth, {
-            volume: -12,
-            oscillator: { type: 'sawtooth' },
-            envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1.2 }
+        // Read the store directly rather than closing over `synth` — this
+        // effect must not re-run on every param change, and building from the
+        // current patch avoids a frame of default values after a preset load.
+        const initial = getPatch().synth
+        const filter = new Tone.Filter(initial.filterCutoff, initial.filterType)
+        filter.Q.value = initial.filterRes
+        const poly = new Tone.PolySynth(Tone.Synth, {
+            volume: initial.volume,
+            oscillator: { type: initial.oscillator },
+            envelope: {
+                attack: initial.attack,
+                decay: initial.decay,
+                sustain: initial.sustain,
+                release: initial.release,
+            }
         })
-        
-        synth.connect(filter)
+
+        poly.connect(filter)
         filter.connect(masterGain)
-        synthRef.current = synth
+        synthRef.current = poly
         filterRef.current = filter
         setLoaded(true)
 
         return () => {
-            synth.dispose()
+            poly.dispose()
             filter.dispose()
+            synthRef.current = null
+            filterRef.current = null
         }
     }, [])
 
     useRegisterParam('PolySynth', () => ({
-        filterCutoff: { label: 'Filter Cutoff', signal: filterRef.current!.frequency, min: 100, max: 10000 },
-        filterRes: { label: 'Filter Resonance', signal: filterRef.current!.Q, min: 0.1, max: 20 },
+        filterCutoff: { label: 'Filter Cutoff', signal: filterRef.current!.frequency, min: SYNTH_RANGES.filterCutoff.min, max: SYNTH_RANGES.filterCutoff.max },
+        filterRes: { label: 'Filter Resonance', signal: filterRef.current!.Q, min: SYNTH_RANGES.filterRes.min, max: SYNTH_RANGES.filterRes.max },
     }), loaded)
 
-    const handleAdsr = (key: keyof ADSRState) => (value: number) => {
-        setAdsr(prev => {
-            const next = { ...prev, [key]: value }
-            synthRef.current?.set({ envelope: next })
-            return next
+    // Push store -> audio graph. Split by node so an envelope tweak doesn't
+    // re-ramp the filter, and vice versa.
+    useEffect(() => {
+        synthRef.current?.set({
+            volume: synth.volume,
+            oscillator: { type: synth.oscillator },
+            envelope: {
+                attack: synth.attack,
+                decay: synth.decay,
+                sustain: synth.sustain,
+                release: synth.release,
+            }
         })
-    }
+    }, [synth.volume, synth.oscillator, synth.attack, synth.decay, synth.sustain, synth.release])
 
-    const handleCutoff = useCallback((value: number) => {
-        setFilterCutoff(value)
-        filterRef.current?.frequency.rampTo(value, 0.02)
-    }, [])
+    useEffect(() => {
+        filterRef.current?.frequency.rampTo(synth.filterCutoff, 0.02)
+    }, [synth.filterCutoff])
 
-    const handleRes = useCallback((value: number) => {
-        setFilterRes(value)
-        filterRef.current?.set({ Q: value })
-    }, [])
+    useEffect(() => {
+        filterRef.current?.set({ Q: synth.filterRes, type: synth.filterType })
+    }, [synth.filterRes, synth.filterType])
 
-    const handleNoteOn = useCallback((midi: number, velocity: number) => {
+    const handleNoteOn = useCallback((midi: number) => {
         synthRef.current?.triggerAttack(Tone.Frequency(midi, 'midi').toFrequency())
     }, [])
 
@@ -87,21 +91,71 @@ function PolySynth() {
     return (
         <div>
             <h3>Poly Synth</h3>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <div>
+                    <p style={{ fontSize: 11, opacity: 0.5, marginBottom: 8 }}>OSCILLATOR</p>
+                    <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+                        {OSC_TYPES.map(w => (
+                            <button
+                                key={w}
+                                onClick={() => setSynthParam('oscillator', w as OscType)}
+                                style={{
+                                    fontSize: 9,
+                                    padding: '2px 6px',
+                                    background: synth.oscillator === w ? '#00ff88' : '#333',
+                                    color: synth.oscillator === w ? '#000' : '#fff',
+                                    border: 'none',
+                                    borderRadius: 3,
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {w}
+                            </button>
+                        ))}
+                    </div>
+                    <Knob
+                        label='Volume'
+                        min={SYNTH_RANGES.volume.min}
+                        max={SYNTH_RANGES.volume.max}
+                        value={synth.volume}
+                        defaultValue={DEFAULT_SYNTH.volume}
+                        onChange={v => setSynthParam('volume', v)}
+                        color='#88ff00'
+                    />
+                </div>
                 <div>
                     <p style={{ fontSize: 11, opacity: 0.5, marginBottom: 8 }}>ENVELOPE</p>
                     <div style={{ display: 'flex', gap: 12 }}>
-                        <Knob label='Attack' min={0} max={2} value={adsr.attack} onChange={handleAdsr('attack')} defaultValue={0.02} />
-                        <Knob label='Decay' min={0} max={2} value={adsr.decay} onChange={handleAdsr('decay')} defaultValue={0.2} color='#ff8800'/>
-                        <Knob label='Sustain' min={0} max={1} value={adsr.sustain} onChange={handleAdsr('sustain')} defaultValue={0.5} color='#ffff00'/>
-                        <Knob label='Release' min={0} max={5} value={adsr.release} onChange={handleAdsr('release')} defaultValue={0.8} color='#aa44ff'/>
+                        <Knob label='Attack' min={SYNTH_RANGES.attack.min} max={SYNTH_RANGES.attack.max} value={synth.attack} onChange={v => setSynthParam('attack', v)} defaultValue={DEFAULT_SYNTH.attack} />
+                        <Knob label='Decay' min={SYNTH_RANGES.decay.min} max={SYNTH_RANGES.decay.max} value={synth.decay} onChange={v => setSynthParam('decay', v)} defaultValue={DEFAULT_SYNTH.decay} color='#ff8800'/>
+                        <Knob label='Sustain' min={SYNTH_RANGES.sustain.min} max={SYNTH_RANGES.sustain.max} value={synth.sustain} onChange={v => setSynthParam('sustain', v)} defaultValue={DEFAULT_SYNTH.sustain} color='#ffff00'/>
+                        <Knob label='Release' min={SYNTH_RANGES.release.min} max={SYNTH_RANGES.release.max} value={synth.release} onChange={v => setSynthParam('release', v)} defaultValue={DEFAULT_SYNTH.release} color='#aa44ff'/>
                     </div>
                 </div>
                 <div>
                     <p style={{ fontSize: 11, opacity: 0.5, marginBottom: 8 }}>FILTER</p>
+                    <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+                        {FILTER_TYPES.map(t => (
+                            <button
+                                key={t}
+                                onClick={() => setSynthParam('filterType', t as FilterType)}
+                                style={{
+                                    fontSize: 9,
+                                    padding: '2px 6px',
+                                    background: synth.filterType === t ? '#00aaff' : '#333',
+                                    color: synth.filterType === t ? '#000' : '#fff',
+                                    border: 'none',
+                                    borderRadius: 3,
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {t}
+                            </button>
+                        ))}
+                    </div>
                     <div style={{ display: 'flex', gap: 12 }}>
-                        <Knob label='Cutoff' min={100} max={10000} value={filterCutoff} onChange={handleCutoff} color='#00aaff'/>
-                        <Knob label='Resonance' min={0.1} max={20} value={filterRes} onChange={handleRes} color='#ff4488'/>
+                        <Knob label='Cutoff' min={SYNTH_RANGES.filterCutoff.min} max={SYNTH_RANGES.filterCutoff.max} value={synth.filterCutoff} defaultValue={DEFAULT_SYNTH.filterCutoff} onChange={v => setSynthParam('filterCutoff', v)} color='#00aaff'/>
+                        <Knob label='Resonance' min={SYNTH_RANGES.filterRes.min} max={SYNTH_RANGES.filterRes.max} value={synth.filterRes} defaultValue={DEFAULT_SYNTH.filterRes} onChange={v => setSynthParam('filterRes', v)} color='#ff4488'/>
                     </div>
                 </div>
             </div>           

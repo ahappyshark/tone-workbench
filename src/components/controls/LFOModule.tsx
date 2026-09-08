@@ -1,107 +1,96 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef } from 'react'
 import * as Tone from 'tone'
-import { useParamRegistry } from '../../context/ParamRegistry'
+import { useParamRegistry, useParamRegistryVersion } from '../../hooks/useParamRegistry'
 import Knob from './Knob'
-
-type WaveformType = 'sine' | 'triangle' | 'sawtooth' | 'square'
+import { removeLFO, updateLFO, useLFOState } from '../../state/patchStore'
+import { OSC_TYPES, LFO_RATE, LFO_DEPTH, type OscType } from '../../audio/patchTypes'
 
 interface LFOModuleProps {
   id: string
-  onRemove: (id: string) => void
 }
 
-function LFOModule({ id, onRemove }: LFOModuleProps) {
+function LFOModule({ id }: LFOModuleProps) {
   const lfoRef = useRef<Tone.LFO | null>(null)
-  const currentTargetRef = useRef<string | null>(null)
   const { getAll } = useParamRegistry()
+  // Re-render when params appear/disappear so the dropdown and the routing
+  // effect below both see the current registry.
+  const registryVersion = useParamRegistryVersion()
 
-  const [waveform, setWaveform] = useState<WaveformType>('sine')
-  const [rate, setRate] = useState(1)
-  const [min, setMin] = useState(0)
-  const [max, setMax] = useState(1)
-  const [target, setTarget] = useState<string>('')
-  const [running, setRunning] = useState(false)
-  const [paramRange, setParamRange] = useState<{ min: number, max: number } | null>(null)
+  const state = useLFOState(id)
 
   useEffect(() => {
-    const lfo = new Tone.LFO({
-      type: waveform,
-      frequency: rate,
-      min,
-      max
-    }).start()
-
+    const lfo = new Tone.LFO()
     lfoRef.current = lfo
-
     return () => {
       lfo.dispose()
+      lfoRef.current = null
     }
   }, [])
 
-  const handleWaveform = (w: WaveformType) => {
-    setWaveform(w)
-    if (lfoRef.current) lfoRef.current.type = w
-  }
+  // Destructured to primitives so each effect below depends only on the one
+  // value it applies, not on the whole LFO object.
+  const waveform = state?.waveform
+  const rate = state?.rate
+  const depthLow = state?.min
+  const depthHigh = state?.max
+  const running = state?.running
+  const target = state?.target ?? ''
 
-  const handleRate = useCallback((v: number) => {
-    setRate(v)
-    if (lfoRef.current) lfoRef.current.frequency.rampTo(v, 0.1)
-  }, [])
+  // Each effect drives one facet of the node from patch state, so loading a
+  // preset and turning a knob go through exactly the same code path.
+  useEffect(() => {
+    if (waveform) lfoRef.current!.type = waveform
+  }, [waveform])
 
-  const handleMin = useCallback((v: number) => {
-    setMin(v)
-    if (lfoRef.current) lfoRef.current.min = v
-  }, [])
+  useEffect(() => {
+    if (rate !== undefined) lfoRef.current!.frequency.rampTo(rate, 0.1)
+  }, [rate])
 
-  const handleMax = useCallback((v: number) => {
-    setMax(v)
-    if (lfoRef.current) lfoRef.current.max = v
-  }, [])
+  useEffect(() => {
+    if (depthLow === undefined || depthHigh === undefined) return
+    lfoRef.current!.min = depthLow
+    lfoRef.current!.max = depthHigh
+  }, [depthLow, depthHigh])
+
+  useEffect(() => {
+    if (running === undefined) return
+    if (running) lfoRef.current!.start()
+    else lfoRef.current!.stop()
+  }, [running])
+
+  // Routing lives in an effect (not the change handler) so a target restored
+  // from a preset connects too — including when the target param registers
+  // after this module mounted, which the registryVersion dep covers.
+  useEffect(() => {
+    const lfo = lfoRef.current
+    if (!lfo || !target) return
+    const entry = getAll().get(target)
+    if (!entry) return
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    lfo.connect(entry.signal as any)
+    return () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      try { lfo.disconnect(entry.signal as any) } catch { /* already gone */ }
+    }
+  }, [target, registryVersion, getAll])
+
+  if (!state) return null
+
+  const targetEntry = target ? getAll().get(target) : undefined
+  const depthMin = targetEntry?.min ?? LFO_DEPTH.min
+  const depthMax = targetEntry?.max ?? LFO_DEPTH.max
 
   const handleTarget = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newTarget = e.target.value
-    const lfo = lfoRef.current
-    if (!lfo) return
-
-    // disconnect from old target
-    if (currentTargetRef.current) {
-      const old = getAll().get(currentTargetRef.current)
-      if (old) {
-        try { lfo.disconnect(old.signal as any) } catch {}
-      }
-    }
-
-    // connect to new target
-    if (newTarget) {
-      const entry = getAll().get(newTarget)
-      if (entry) {
-        lfo.connect(entry.signal as any)
-        currentTargetRef.current = newTarget
-
-        if (entry.min !== undefined && entry.max !== undefined) {
-          setParamRange({ min: entry.min, max: entry.max })
-          setMin(entry.min)
-          setMax(entry.max)
-          lfo.min = entry.min
-          lfo.max = entry.max
-        }
-      }
+    const next = e.target.value
+    const entry = next ? getAll().get(next) : undefined
+    // Snap the depth knobs to the new param's range. Only on an explicit
+    // pick — a preset load must keep the depths it was saved with.
+    if (entry && entry.min !== undefined && entry.max !== undefined) {
+      updateLFO(id, { target: next, min: entry.min, max: entry.max })
     } else {
-      currentTargetRef.current = null
+      updateLFO(id, { target: next })
     }
-
-    setTarget(newTarget)
-  }
-
-  const toggleRunning = () => {
-    const lfo = lfoRef.current
-    if (!lfo) return
-    if (running) {
-      lfo.stop()
-    } else {
-      lfo.start()
-    }
-    setRunning(!running)
   }
 
   const params = [...getAll().entries()]
@@ -120,13 +109,13 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
         <span style={{ fontSize: 11, opacity: 0.5 }}>LFO</span>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
-            onClick={toggleRunning}
-            style={{ fontSize: 10, color: running ? '#00ff88' : '#888' }}
+            onClick={() => updateLFO(id, { running: !state.running })}
+            style={{ fontSize: 10, color: state.running ? '#00ff88' : '#888' }}
           >
-            {running ? '■ stop' : '▶ run'}
+            {state.running ? '■ stop' : '▶ run'}
           </button>
           <button
-            onClick={() => onRemove(id)}
+            onClick={() => removeLFO(id)}
             style={{ fontSize: 10, color: '#ff4444' }}
           >
             ✕
@@ -136,15 +125,15 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
 
       {/* waveform selector */}
       <div style={{ display: 'flex', gap: 4 }}>
-        {(['sine', 'triangle', 'sawtooth', 'square'] as WaveformType[]).map(w => (
+        {OSC_TYPES.map(w => (
           <button
             key={w}
-            onClick={() => handleWaveform(w)}
+            onClick={() => updateLFO(id, { waveform: w as OscType })}
             style={{
               fontSize: 9,
               padding: '2px 6px',
-              background: waveform === w ? '#00ff88' : '#333',
-              color: waveform === w ? '#000' : '#fff',
+              background: state.waveform === w ? '#00ff88' : '#333',
+              color: state.waveform === w ? '#000' : '#fff',
               border: 'none',
               borderRadius: 3,
               cursor: 'pointer'
@@ -159,31 +148,31 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
       <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
         <Knob
           label="Rate"
-          min={0.01}
-          max={20}
-          value={rate}
+          min={LFO_RATE.min}
+          max={LFO_RATE.max}
+          value={state.rate}
           defaultValue={1}
-          onChange={handleRate}
+          onChange={v => updateLFO(id, { rate: v })}
           size={48}
           color="#00ff88"
         />
         <Knob
           label="Min"
-          min={paramRange?.min ?? -10000}
-          max={paramRange?.max ?? 10000}
-          value={min}
+          min={depthMin}
+          max={depthMax}
+          value={state.min}
           defaultValue={0}
-          onChange={handleMin}
+          onChange={v => updateLFO(id, { min: v })}
           size={48}
           color="#ff8800"
         />
         <Knob
           label="Max"
-          min={paramRange?.min ?? -10000}
-          max={paramRange?.max ?? 10000}
-          value={max}
+          min={depthMin}
+          max={depthMax}
+          value={state.max}
           defaultValue={1}
-          onChange={handleMax}
+          onChange={v => updateLFO(id, { max: v })}
           size={48}
           color="#aa44ff"
         />
@@ -205,15 +194,18 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
           }}
         >
           <option value="">— none —</option>
-          {params.map(([id, entry]) => (
-            <option key={id} value={id}>{entry.label}</option>
+          {/* A preset can name a param no patch has registered yet; keep it
+              selectable rather than silently resetting the routing. */}
+          {target && !targetEntry && <option value={target}>{target} (missing)</option>}
+          {params.map(([paramId, entry]) => (
+            <option key={paramId} value={paramId}>{entry.label}</option>
           ))}
         </select>
       </div>
 
       {target && (
         <div style={{ fontSize: 10, opacity: 0.4, textAlign: 'center' }}>
-          {min.toFixed(1)} → {max.toFixed(1)} @ {rate.toFixed(2)}hz
+          {state.min.toFixed(1)} → {state.max.toFixed(1)} @ {state.rate.toFixed(2)}hz
         </div>
       )}
     </div>

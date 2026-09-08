@@ -11,6 +11,7 @@ import SynthTestPatch from './components/patches/SynthTestPatch'
 import GrainPatch from './components/patches/GrainPatch'
 import PolySynth from './components/patches/PolySynth'
 import LFORack from './components/LFORack'
+import PresetBar from './components/PresetBar'
 
 function App() {
   const [started, setStarted] = useState(false)
@@ -28,7 +29,8 @@ function App() {
       {started && 
         <>
           <TransportControls />
-          <Visualizer />          
+          <Visualizer />
+          <PresetBar />
           <PolySynth />
           <LFORack />
         </>

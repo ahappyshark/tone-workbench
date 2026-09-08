@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import * as Tone from 'tone'
-import { useParamRegistry } from "../context/ParamRegistry";
+import { useParamRegistry } from "./useParamRegistry";
 
 interface ParamEntry {
     label: string
