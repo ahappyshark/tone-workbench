@@ -75,7 +75,26 @@ export class SynthEngine {
             this.dropGroup(note)
             claimed.push(...group)
         }
+        if (claimed.length >= count) return claimed.slice(0, count)
+
+        // Last resort: voices released by allNotesOff that belong to no group
+        // and are still ringing out. Nothing else can reach them, and without
+        // this a fast enough mode change would leave nothing claimable at all.
+        for (const voice of this.ungrouped()) {
+            if (claimed.length >= count) break
+            voice.reclaim()
+            claimed.push(voice)
+        }
         return claimed.slice(0, count)
+    }
+
+    /** Voices holding a note that no group owns — oldest first. */
+    private ungrouped(): Voice[] {
+        const grouped = new Set<Voice>()
+        for (const group of this.groups.values()) for (const v of group) grouped.add(v)
+        return this.voices
+            .filter(v => v.note !== null && !grouped.has(v))
+            .sort((a, b) => a.startedAt - b.startedAt)
     }
 
     /**
@@ -84,8 +103,21 @@ export class SynthEngine {
      */
     private sweep() {
         const now = Tone.now()
+        // Iterate voices rather than groups: a voice released by allNotesOff
+        // has no group to be found through, and scanning groups alone is how
+        // those voices used to leak out of the pool for good.
+        let reclaimed = false
+        for (const voice of this.voices) {
+            if (voice.note !== null && voice.isSpent(now)) {
+                voice.reclaim()
+                reclaimed = true
+            }
+        }
+        if (!reclaimed) return
+        // A group's voices are released together, so one reclaimed member
+        // means the whole group is spent.
         for (const [note, group] of this.groups) {
-            if (group.every(v => v.isSpent(now))) this.dropGroup(note)
+            if (group.some(v => v.note === null)) this.groups.delete(note)
         }
     }
 
@@ -179,11 +211,16 @@ export class SynthEngine {
         else for (const v of group) v.trigger(next, 0.8)
     }
 
+    /**
+     * Release everything and forget the groups. The voices keep ringing out
+     * and are recovered by `sweep` once spent, or claimed early by `claim`'s
+     * last resort — they must never be simply dropped, or they leak.
+     */
     allNotesOff() {
-        for (const [note, group] of this.groups) {
+        for (const group of this.groups.values()) {
             for (const v of group) v.release()
-            this.groups.delete(note)
         }
+        this.groups.clear()
         this.held = []
     }
 
