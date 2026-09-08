@@ -11,7 +11,7 @@ Status: **OPEN** (undecided) · **DECIDED** (settled, kept for the rationale) ·
 
 ## Modulation
 
-### 1. LFO modulation is additive, and the UI doesn't say so — **DECIDED → (b)**
+### 1. LFO modulation is additive, and the UI doesn't say so — **DONE**
 
 Connecting a `Tone.LFO` to a param *sums* with that param's base value; it does
 not replace it. So a cutoff of 4000 with an LFO of `100 → 10000` actually
@@ -48,10 +48,11 @@ Two consequences worth recording:
   exponential) instead of `frequency` (linear Hz). Without that, the same depth
   is a four-octave lurch at 200Hz and inaudible at 8kHz.
 
-Lands in phase 2 of the build. Until then the current additive behaviour and
-its wrong readout stay as-is.
+Shipped in phase 2. The min/max pair is gone; each route carries one signed
+depth, and the row prints what that depth means in the destination's units
+(`0.45 → +2160 cents`) so the number on screen is the real one.
 
-### 2. Can two LFOs target the same param? — **DECIDED (yes)**
+### 2. Can two LFOs target the same param? — **DONE**
 
 Nothing prevents it today and they sum, which is musically useful. The current
 hazard is only that depth knobs snap to the param's full range on selection, so
@@ -59,11 +60,18 @@ two sources both snapped to `100 → 10000` will scream. Bipolar depth (#1)
 removes the snap and the hazard with it — multiple routes to one destination
 becomes a normal, intended thing.
 
-### 3. Tempo-synced LFO rates — **DEFERRED**
+### 3. Tempo-synced LFO rates — **DONE**
 
-Rate is free-running Hz only. `Tone.Transport` exists and `TransportControls`
-already drives BPM, so `1/4`, `1/8T`, `1/16` rates are cheap and are table
-stakes for anything rhythmic. Needs a rate-mode toggle in `LFOState`.
+Shipped in phase 2 for both LFOs and random S&H. Two things worth recording:
+
+- `lfo.sync()` captures the frequency signal's *current* value as its ratio
+  against transport bpm, so the division has to be assigned **before** calling
+  it. Setting it afterwards silently overwrites the synced connection and the
+  rate stops following tempo — and `frequency.value` then reads 0, so you
+  can't detect it by inspection, only by ear.
+- A synced source is scheduled on the transport timeline, so it needs
+  `start(0)`, not `start()`, and it only runs while the transport does. The
+  LFO panel says so rather than leaving it a mystery.
 
 ---
 
@@ -182,12 +190,15 @@ destinations and registers them directly inside the effect that builds the
 voice pool, so there is no `ready` flag and no deferred `getParams` closure.
 The hook had no callers left and was deleted.
 
-### 13. `RegisteredParam.targets` is `any` — **DEFERRED**
+### 13. `RegisteredParam.targets` is `any` — **RESOLVED (registry deleted)**
 
-`Tone.Signal<any> | Tone.Param<any>` with `as any` at both connect and
-disconnect. Tone's param generics don't unify cleanly across units
-(`frequency` vs `positive` vs `decibels`); a discriminated union keyed on unit
-would type it properly. Low value until the mod matrix exists.
+Moot. The param registry existed so LFOs could discover destinations at
+runtime; with the matrix, destinations are a static table (`MOD_DESTINATIONS`)
+and each voice resolves them itself. `ParamRegistry`, its context and its
+hooks are deleted, and the provider is out of `main.tsx`.
+
+If OQ #9 (multiple instruments) is ever taken up, the destination table grows
+an instrument prefix rather than the registry coming back.
 
 ---
 
@@ -235,12 +246,12 @@ useful as a cheap thickener — they're just not the unison feature.
 Cost: unison eats polyphony, which is the trade the control exposes and the
 reason the pool is 16 (#14).
 
-### 16. Does the mod matrix get a UI, or stay a list? — **OPEN**
+### 16. Does the mod matrix get a UI, or stay a list? — **DECIDED (list)**
 
-A route is `{source, destination, depth}`. A flat "add route" list is trivial
-and scales badly past ~8 routes; a grid is the classic answer and is a real
-chunk of UI work. Start with the list, since the routes themselves are the
-interesting part and the list is throwaway.
+Shipped as a flat list of `{source, destination, depth}` rows. Deliberately
+throwaway: the routing is the interesting part, and a week of using a mediocre
+list will say more about what the real UI wants than guessing now. Revisit
+once a patch routinely runs past ~8 routes.
 
 ### 17. What actually makes the two variants different? — **OPEN**
 
@@ -259,7 +270,7 @@ sound meaningfully different under a trill and every hardware mono synth picks
 one. Default to last-note (most intuitive on a keyboard); worth exposing per
 patch only if a variant actually wants otherwise.
 
-### 19. Oscillators run continuously — **OPEN**
+### 19. Oscillators run continuously — **OPEN (worse now)**
 
 Every voice's sources are started once and gated by the amp envelope, because
 starting and stopping them per note clicks. That means 16 voices × (2 osc +
@@ -267,13 +278,41 @@ sub + noise) are always generating, and `fat` mode multiplies the oscillator
 count by up to 7 per slot — a patch with both slots on `fat`/count 7 is
 running 224 oscillators before the sub and noise.
 
-No audible problem yet. If crackle ever shows up this is the first suspect,
-and the fix is to stop a voice's sources once its release tail is spent (the
+Phase 2 adds to this: a `perVoice` LFO is instantiated 16 times, so three
+per-voice LFOs is another 48 running oscillators on top.
+
+Still no audible problem. If crackle shows up this is the first suspect, and
+the fix is to stop a voice's sources once its release tail is spent (the
 `isSpent` check the sweep already uses) and restart them on trigger.
 
-### 20. Velocity only reaches the amp envelope — **OPEN**
+### 20. Velocity only reaches the amp envelope — **DONE**
 
-`triggerAttack(time, velocity)` scales the amp envelope and nothing else.
-Velocity to filter cutoff is the single most expressive routing on most synths
-and is currently missing. It belongs in the phase 2 mod matrix as a source
-rather than being special-cased now.
+Velocity is a proper per-voice mod source as of phase 2, held at a constant
+signal for the life of the note. Routed to filter cutoff at full depth it
+moves the measured brightness from 4.9 to 28.2 between a soft and a hard
+note — the difference between an instrument that responds to playing and one
+that doesn't.
+
+### 21. Synced sources need the transport running — **OPEN**
+
+An LFO or S&H in `sync` mode is scheduled on the transport, so it sits still
+until Play is pressed. That is what locking to tempo *means*, and both panels
+say so, but it will still read as "my LFO is broken" the first time.
+
+Options if it grates: auto-start the transport when a synced source exists;
+show a warning when something is synced and the transport is stopped; or free
+the rate from the transport and merely derive Hz from BPM (which then stops
+following tempo changes). Leaving it until it actually annoys someone.
+
+### 22. Test runs need a fresh dev server — **RESOLVED (process note)**
+
+Not a product issue, but it cost real time twice, so: Vite appends `?t=<ts>`
+HMR query strings to modules it has re-transformed. A test that does
+`import('/src/state/patchStore.ts')` then gets a **different module instance**
+than the running app — the store writes land in one copy and the UI reads the
+other, which presents exactly like a broken subscription.
+
+The same trap applies to `tone` itself (`?v=<hash>`), where it presents as an
+AudioContext mismatch. Restart the dev server before a test run, and treat
+"the UI stopped reacting to the store" as a suspected module-identity problem
+before debugging the store.

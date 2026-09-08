@@ -2,7 +2,9 @@ import { useMemo, useSyncExternalStore } from 'react'
 import {
     DEFAULT_PATCH,
     createLFO,
+    createRoute,
     type LFOState,
+    type ModRoute,
     type PatchState,
 } from '../audio/patchTypes'
 
@@ -21,7 +23,7 @@ import {
 type Listener = () => void
 
 /** The patch sections that hold plain parameter records. */
-export type SectionKey = 'oscA' | 'oscB' | 'sub' | 'noise' | 'filter' | 'ampEnv' | 'modEnv' | 'voice'
+export type SectionKey = 'oscA' | 'oscB' | 'sub' | 'noise' | 'filter' | 'ampEnv' | 'modEnv' | 'voice' | 'random'
 
 let patch: PatchState = structuredClone(DEFAULT_PATCH)
 const listeners = new Set<Listener>()
@@ -74,7 +76,33 @@ export function addLFO(): string {
 
 export function removeLFO(id: string) {
     if (!patch.lfos.some(l => l.id === id)) return
-    setPatch({ ...patch, lfos: patch.lfos.filter(l => l.id !== id) })
+    // Routes fed by this LFO would point at a source that no longer exists.
+    setPatch({
+        ...patch,
+        lfos: patch.lfos.filter(l => l.id !== id),
+        modRoutes: patch.modRoutes.filter(r => r.source !== `lfo:${id}`),
+    })
+}
+
+export function addRoute(): string {
+    let id = `route-${Date.now().toString(36)}`
+    let n = 0
+    while (patch.modRoutes.some(r => r.id === id)) id = `route-${Date.now().toString(36)}-${n++}`
+    setPatch({ ...patch, modRoutes: [...patch.modRoutes, createRoute(id)] })
+    return id
+}
+
+export function updateRoute(id: string, changes: Partial<Omit<ModRoute, 'id'>>) {
+    const current = patch.modRoutes.find(r => r.id === id)
+    if (!current) return
+    const keys = Object.keys(changes) as (keyof typeof changes)[]
+    if (keys.every(k => current[k] === changes[k])) return
+    setPatch({ ...patch, modRoutes: patch.modRoutes.map(r => (r.id === id ? { ...r, ...changes } : r)) })
+}
+
+export function removeRoute(id: string) {
+    if (!patch.modRoutes.some(r => r.id === id)) return
+    setPatch({ ...patch, modRoutes: patch.modRoutes.filter(r => r.id !== id) })
 }
 
 export function setPatchName(name: string) {
@@ -107,6 +135,26 @@ export function useLFOState(id: string): LFOState | undefined {
 export function useLFOIds(): string[] {
     const key = useSyncExternalStore(subscribe, () => patch.lfos.map(l => l.id).join(','))
     return useMemo(() => (key ? key.split(',') : []), [key])
+}
+
+export function useRoute(id: string): ModRoute | undefined {
+    return useSyncExternalStore(subscribe, () => patch.modRoutes.find(r => r.id === id))
+}
+
+/** Ids only, so a depth knob doesn't re-render the whole matrix. */
+export function useRouteIds(): string[] {
+    const key = useSyncExternalStore(subscribe, () => patch.modRoutes.map(r => r.id).join(','))
+    return useMemo(() => (key ? key.split(',') : []), [key])
+}
+
+/** The full route list, for the engine bridge. */
+export function useSyncedRoutes(): ModRoute[] {
+    return useSyncExternalStore(subscribe, () => patch.modRoutes)
+}
+
+/** The full LFO list, for the matrix's source dropdown. */
+export function useLFOs(): LFOState[] {
+    return useSyncExternalStore(subscribe, () => patch.lfos)
 }
 
 export function usePatchName(): string {

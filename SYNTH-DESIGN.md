@@ -261,7 +261,7 @@ Each phase should end with something audible.
 | # | Phase | Contains | Rough size |
 |---|---|---|---|
 | 1 | ~~**Voice pool**~~ **DONE** | `Voice`, group allocator, stealing, unison/detune/spread, 2 osc + sub + noise, filter, amp + mod envelope. `Tone.PolySynth` is gone. | landed |
-| 2 | **Mod matrix** | Destination descriptors, routes, depth gains, `detune` routing, per-voice LFOs. Retires the LFO target dropdown. | ~300 lines |
+| 2 | ~~**Mod matrix**~~ **DONE** | Routes, signed depth gains, `detune` routing, per-voice LFOs, velocity/key-track/mod-wheel/random sources, tempo sync. LFO target dropdown retired. | landed |
 | 3 | **Playability** | Glide, mono/legato note priority, velocity routing. Unison itself lands in phase 1 with the allocator. | small |
 | 4 | **Effects chain** | Drive/waveshaper, chorus, delay, reverb, wet knobs, as patch state. | ~250 lines |
 | 5 | **Variants** | `Shark Ambient` and `Shark Aggro` preset packs. Generative sequencer for the ambient one (`SequencerPatch` and `ArpPatch` are the seed — OPEN-QUESTIONS #8). | data + one module |

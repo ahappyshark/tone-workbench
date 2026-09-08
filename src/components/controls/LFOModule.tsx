@@ -1,104 +1,21 @@
-import { useEffect, useRef } from 'react'
-import * as Tone from 'tone'
-import { useParamRegistry, useParamRegistryVersion } from '../../hooks/useParamRegistry'
 import Knob from './Knob'
+import Selector from './Selector'
 import { removeLFO, updateLFO, useLFOState } from '../../state/patchStore'
-import { WAVES, LFO_RATE, LFO_DEPTH, type Wave } from '../../audio/patchTypes'
+import { DIVISIONS, LFO_RATE, WAVES } from '../../audio/patchTypes'
 
 interface LFOModuleProps {
   id: string
+  /** Shown so an unrouted LFO doesn't look broken. */
+  routeCount: number
 }
 
-function LFOModule({ id }: LFOModuleProps) {
-  const lfoRef = useRef<Tone.LFO | null>(null)
-  const { getAll } = useParamRegistry()
-  // Re-render when params appear/disappear so the dropdown and the routing
-  // effect below both see the current registry.
-  const registryVersion = useParamRegistryVersion()
-
+/**
+ * An LFO is now purely a modulation *source* — where it goes is the mod
+ * matrix's business. Output is normalised to -1..1 like every other source.
+ */
+function LFOModule({ id, routeCount }: LFOModuleProps) {
   const state = useLFOState(id)
-
-  useEffect(() => {
-    const lfo = new Tone.LFO()
-    lfoRef.current = lfo
-    return () => {
-      lfo.dispose()
-      lfoRef.current = null
-    }
-  }, [])
-
-  // Destructured to primitives so each effect below depends only on the one
-  // value it applies, not on the whole LFO object.
-  const waveform = state?.waveform
-  const rate = state?.rate
-  const depthLow = state?.min
-  const depthHigh = state?.max
-  const running = state?.running
-  const target = state?.target ?? ''
-
-  // Each effect drives one facet of the node from patch state, so loading a
-  // preset and turning a knob go through exactly the same code path.
-  useEffect(() => {
-    if (waveform) lfoRef.current!.type = waveform
-  }, [waveform])
-
-  useEffect(() => {
-    if (rate !== undefined) lfoRef.current!.frequency.rampTo(rate, 0.1)
-  }, [rate])
-
-  useEffect(() => {
-    if (depthLow === undefined || depthHigh === undefined) return
-    lfoRef.current!.min = depthLow
-    lfoRef.current!.max = depthHigh
-  }, [depthLow, depthHigh])
-
-  useEffect(() => {
-    if (running === undefined) return
-    if (running) lfoRef.current!.start()
-    else lfoRef.current!.stop()
-  }, [running])
-
-  // Routing lives in an effect (not the change handler) so a target restored
-  // from a preset connects too — including when the target param registers
-  // after this module mounted, which the registryVersion dep covers.
-  useEffect(() => {
-    const lfo = lfoRef.current
-    if (!lfo || !target) return
-    const entry = getAll().get(target)
-    if (!entry) return
-
-    // One destination id fans out across the whole voice pool.
-    for (const t of entry.targets) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      lfo.connect(t as any)
-    }
-    return () => {
-      for (const t of entry.targets) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        try { lfo.disconnect(t as any) } catch { /* already gone */ }
-      }
-    }
-  }, [target, registryVersion, getAll])
-
   if (!state) return null
-
-  const targetEntry = target ? getAll().get(target) : undefined
-  const depthMin = targetEntry?.min ?? LFO_DEPTH.min
-  const depthMax = targetEntry?.max ?? LFO_DEPTH.max
-
-  const handleTarget = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const next = e.target.value
-    const entry = next ? getAll().get(next) : undefined
-    // Snap the depth knobs to the new param's range. Only on an explicit
-    // pick — a preset load must keep the depths it was saved with.
-    if (entry && entry.min !== undefined && entry.max !== undefined) {
-      updateLFO(id, { target: next, min: entry.min, max: entry.max })
-    } else {
-      updateLFO(id, { target: next })
-    }
-  }
-
-  const params = [...getAll().entries()]
 
   return (
     <div style={{
@@ -108,7 +25,7 @@ function LFOModule({ id }: LFOModuleProps) {
       display: 'flex',
       flexDirection: 'column',
       gap: 10,
-      minWidth: 200
+      minWidth: 210,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 11, opacity: 0.5 }}>LFO</span>
@@ -119,102 +36,58 @@ function LFOModule({ id }: LFOModuleProps) {
           >
             {state.running ? '■ stop' : '▶ run'}
           </button>
-          <button
-            onClick={() => removeLFO(id)}
-            style={{ fontSize: 10, color: '#ff4444' }}
-          >
-            ✕
-          </button>
+          <button onClick={() => removeLFO(id)} style={{ fontSize: 10, color: '#ff4444' }}>✕</button>
         </div>
       </div>
 
-      {/* waveform selector */}
+      <Selector options={WAVES} value={state.waveform} onChange={w => updateLFO(id, { waveform: w })} />
+
       <div style={{ display: 'flex', gap: 4 }}>
-        {WAVES.map(w => (
-          <button
-            key={w}
-            onClick={() => updateLFO(id, { waveform: w as Wave })}
-            style={{
-              fontSize: 9,
-              padding: '2px 6px',
-              background: state.waveform === w ? '#00ff88' : '#333',
-              color: state.waveform === w ? '#000' : '#fff',
-              border: 'none',
-              borderRadius: 3,
-              cursor: 'pointer'
-            }}
-          >
-            {w}
-          </button>
-        ))}
+        <button
+          onClick={() => updateLFO(id, { sync: false })}
+          style={tab(!state.sync, '#00ff88')}
+        >free</button>
+        <button
+          onClick={() => updateLFO(id, { sync: true })}
+          style={tab(state.sync, '#00ff88')}
+        >sync</button>
+        <button
+          onClick={() => updateLFO(id, { perVoice: !state.perVoice })}
+          style={tab(state.perVoice, '#aa44ff')}
+          title="One LFO per voice, restarted on each note, so notes drift independently"
+        >per-voice</button>
       </div>
 
-      {/* knobs */}
-      <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-        <Knob
-          label="Rate"
-          min={LFO_RATE.min}
-          max={LFO_RATE.max}
-          value={state.rate}
-          defaultValue={1}
-          onChange={v => updateLFO(id, { rate: v })}
-          size={48}
-          color="#00ff88"
-        />
-        <Knob
-          label="Min"
-          min={depthMin}
-          max={depthMax}
-          value={state.min}
-          defaultValue={0}
-          onChange={v => updateLFO(id, { min: v })}
-          size={48}
-          color="#ff8800"
-        />
-        <Knob
-          label="Max"
-          min={depthMin}
-          max={depthMax}
-          value={state.max}
-          defaultValue={1}
-          onChange={v => updateLFO(id, { max: v })}
-          size={48}
-          color="#aa44ff"
-        />
-      </div>
+      {state.sync
+        ? <>
+            <Selector options={DIVISIONS} value={state.division}
+              onChange={d => updateLFO(id, { division: d })} color="#00aaff" />
+            <span style={{ fontSize: 9, opacity: 0.4 }}>runs only while the transport does</span>
+          </>
+        : <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <Knob label="Rate" min={LFO_RATE.min} max={LFO_RATE.max} value={state.rate}
+              defaultValue={1} onChange={v => updateLFO(id, { rate: v })} size={48} color="#00ff88" />
+          </div>}
 
-      {/* target selector */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <span style={{ fontSize: 10, opacity: 0.5 }}>Target</span>
-        <select
-          value={target}
-          onChange={handleTarget}
-          style={{
-            background: '#222',
-            color: '#fff',
-            border: '1px solid #444',
-            borderRadius: 4,
-            padding: '4px 6px',
-            fontSize: 11
-          }}
-        >
-          <option value="">— none —</option>
-          {/* A preset can name a param no patch has registered yet; keep it
-              selectable rather than silently resetting the routing. */}
-          {target && !targetEntry && <option value={target}>{target} (missing)</option>}
-          {params.map(([paramId, entry]) => (
-            <option key={paramId} value={paramId}>{entry.label}</option>
-          ))}
-        </select>
-      </div>
-
-      {target && (
-        <div style={{ fontSize: 10, opacity: 0.4, textAlign: 'center' }}>
-          {state.min.toFixed(1)} → {state.max.toFixed(1)}{targetEntry?.unit ? ` ${targetEntry.unit}` : ''} @ {state.rate.toFixed(2)}hz
-        </div>
-      )}
+      <span style={{ fontSize: 9, opacity: 0.4, textAlign: 'center' }}>
+        {routeCount === 0
+          ? 'not routed — add a route below'
+          : `${routeCount} route${routeCount === 1 ? '' : 's'}`}
+      </span>
     </div>
   )
+}
+
+function tab(active: boolean, color: string): React.CSSProperties {
+  return {
+    fontSize: 9,
+    padding: '2px 6px',
+    background: active ? color : '#333',
+    color: active ? '#000' : '#fff',
+    border: 'none',
+    borderRadius: 3,
+    cursor: 'pointer',
+  }
 }
 
 export default LFOModule

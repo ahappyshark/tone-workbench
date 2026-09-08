@@ -1,25 +1,18 @@
 import * as Tone from 'tone'
-import { Voice } from './voice'
-import { DEFAULT_PATCH, type PatchState, type VoiceState } from './patchTypes'
+import { Voice, applyLFOSettings } from './voice'
+import {
+    DEFAULT_PATCH,
+    MOD_SOURCE_META,
+    type LFOState,
+    type ModRoute,
+    type PatchState,
+    type RandomState,
+    type VoiceState,
+} from './patchTypes'
 
 /** Fixed pool size. Not a control — rebuilding nodes mid-playback clicks. */
 export const POLYPHONY = 16
 
-/**
- * UI metadata for the destinations `SynthEngine.modTargets()` exposes.
- *
- * `filter.detune` is the musically useful one: it's in cents, so a given depth
- * sweeps the same number of octaves wherever the cutoff knob sits, unlike
- * `filter.cutoff` which is linear Hz.
- */
-export const MOD_TARGET_META: Record<string, { label: string, min: number, max: number, unit?: string }> = {
-    'filter.cutoff': { label: 'Filter Cutoff', min: 20, max: 18000, unit: 'Hz' },
-    'filter.detune': { label: 'Filter Detune', min: -4800, max: 4800, unit: 'cents' },
-    'filter.resonance': { label: 'Filter Resonance', min: 0.1, max: 20 },
-    'oscA.detune': { label: 'Osc A Pitch', min: -1200, max: 1200, unit: 'cents' },
-    'oscB.detune': { label: 'Osc B Pitch', min: -1200, max: 1200, unit: 'cents' },
-    'amp.pan': { label: 'Pan', min: -1, max: 1 },
-}
 
 /**
  * The voice pool and its allocator.
@@ -39,6 +32,16 @@ export class SynthEngine {
     private held: number[] = []
     private voiceState: VoiceState = DEFAULT_PATCH.voice
 
+    /** Sources shared by every voice: one node, fanned out by the routes. */
+    private readonly modWheel: Tone.Signal<'number'>
+    private readonly random: Tone.Signal<'number'>
+    /** free-running S&H clock — independent of the transport */
+    private readonly randomClock: Tone.Clock
+    /** tempo-locked S&H — runs on the transport, like a synced LFO */
+    private readonly randomLoop: Tone.Loop
+    private readonly globalLFOs = new Map<string, Tone.LFO>()
+    private lfoStates: LFOState[] = []
+
     constructor() {
         // 16 voices summing into one bus needs headroom; the master limiter
         // catches what's left.
@@ -48,6 +51,101 @@ export class SynthEngine {
             voice.output.connect(this.output)
             return voice
         })
+
+        this.modWheel = new Tone.Signal(0)
+        this.random = new Tone.Signal(0)
+        // Sample-and-hold: a new value held until the next tick.
+        //
+        // Two clocks because they mean different things. Tone.Loop is
+        // scheduled on the transport, so a *synced* S&H correctly only ticks
+        // while the transport runs — but a free-running one must not depend
+        // on the transport at all, and Tone.Clock runs off the audio context.
+        const step = () => { this.random.value = Math.random() * 2 - 1 }
+        this.randomClock = new Tone.Clock(step, 4)
+        this.randomLoop = new Tone.Loop(step, '8n')
+        this.randomClock.start()
+    }
+
+    /* -------------------------------------------------------------- */
+    /* Modulation                                                      */
+    /* -------------------------------------------------------------- */
+
+    /** Live controller value, 0..1. Not patch state — it's a hand on a wheel. */
+    setModWheel(value: number) {
+        this.modWheel.value = Math.max(0, Math.min(1, value))
+    }
+
+    applyRandom(state: RandomState) {
+        if (state.sync) {
+            this.randomClock.stop()
+            this.randomLoop.interval = state.division
+            this.randomLoop.start(0)
+        } else {
+            this.randomLoop.stop()
+            this.randomClock.frequency.value = Math.max(state.rate, 0.01)
+            this.randomClock.start()
+        }
+    }
+
+    /**
+     * Reconcile LFO nodes with patch state. A `perVoice` LFO lives inside each
+     * voice; a shared one lives here. Flipping the flag moves it, which is why
+     * both sides are torn down before the wanted one is built.
+     */
+    applyLFOs(states: LFOState[]) {
+        this.lfoStates = states
+        const wanted = new Set(states.map(l => l.id))
+
+        for (const [id, lfo] of this.globalLFOs) {
+            if (!wanted.has(id)) { lfo.dispose(); this.globalLFOs.delete(id) }
+        }
+        for (const voice of this.voices) {
+            for (const id of voice.lfoIds()) {
+                if (!wanted.has(id)) voice.dropLFO(id)
+            }
+        }
+
+        for (const state of states) {
+            if (state.perVoice) {
+                const shared = this.globalLFOs.get(state.id)
+                if (shared) { shared.dispose(); this.globalLFOs.delete(state.id) }
+                for (const voice of this.voices) voice.syncLFO(state)
+            } else {
+                for (const voice of this.voices) voice.dropLFO(state.id)
+                let lfo = this.globalLFOs.get(state.id)
+                if (!lfo) {
+                    lfo = new Tone.LFO({ min: -1, max: 1 })
+                    this.globalLFOs.set(state.id, lfo)
+                }
+                applyLFOSettings(lfo, state)
+            }
+        }
+    }
+
+    /** Wire every route into every voice. Depth-only changes reuse the gain. */
+    applyRoutes(routes: ModRoute[]) {
+        const wanted = new Set(routes.map(r => r.id))
+        for (const voice of this.voices) {
+            for (const id of voice.routeIds()) {
+                if (!wanted.has(id)) voice.clearRoute(id)
+            }
+            for (const route of routes) {
+                voice.setRoute(route.id, this.sourceFor(route.source, voice), route.destination, route.depth)
+            }
+        }
+    }
+
+    private sourceFor(sourceId: string, voice: Voice): Tone.ToneAudioNode | null {
+        if (sourceId.startsWith('lfo:')) {
+            const id = sourceId.slice(4)
+            const state = this.lfoStates.find(l => l.id === id)
+            if (!state) return null
+            return state.perVoice ? voice.sourceNode(sourceId) : (this.globalLFOs.get(id) ?? null)
+        }
+        const meta = MOD_SOURCE_META[sourceId as keyof typeof MOD_SOURCE_META]
+        if (!meta) return null
+        if (meta.perVoice) return voice.sourceNode(sourceId)
+        return sourceId === 'modWheel' ? this.modWheel : this.random
     }
 
     /* -------------------------------------------------------------- */
@@ -275,28 +373,19 @@ export class SynthEngine {
         this.applyAmpEnv(patch.ampEnv)
         this.applyModEnv(patch.modEnv)
         this.applyVoice(patch.voice)
-    }
-
-    /**
-     * Modulation destinations, fanned out across the pool: one id maps to
-     * POLYPHONY params, all of which a route connects to.
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    modTargets(): Map<string, (Tone.Param<any> | Tone.Signal<any>)[]> {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const out = new Map<string, (Tone.Param<any> | Tone.Signal<any>)[]>()
-        for (const voice of this.voices) {
-            for (const [id, param] of Object.entries(voice.modTargets)) {
-                const list = out.get(id)
-                if (list) list.push(param)
-                else out.set(id, [param])
-            }
-        }
-        return out
+        this.applyRandom(patch.random)
+        this.applyLFOs(patch.lfos)
+        this.applyRoutes(patch.modRoutes)
     }
 
     dispose() {
+        this.randomClock.dispose()
+        this.randomLoop.dispose()
+        for (const lfo of this.globalLFOs.values()) lfo.dispose()
+        this.globalLFOs.clear()
         for (const v of this.voices) v.dispose()
+        this.modWheel.dispose()
+        this.random.dispose()
         this.output.dispose()
         this.groups.clear()
     }

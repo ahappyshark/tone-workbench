@@ -5,7 +5,7 @@
  * patch may live in component state, or it won't survive a save/load.
  */
 
-export const PATCH_VERSION = 2
+export const PATCH_VERSION = 3
 
 export const WAVES = ['sine', 'triangle', 'sawtooth', 'square'] as const
 export type Wave = typeof WAVES[number]
@@ -90,15 +90,77 @@ export interface VoiceState {
     spread: number
 }
 
+/** Tempo-locked LFO rates, as note divisions of the transport. */
+export const DIVISIONS = ['1n', '2n', '4n', '4t', '8n', '8t', '16n', '16t', '32n'] as const
+export type Division = typeof DIVISIONS[number]
+
 export interface LFOState {
     id: string
     waveform: Wave
+    /** free-running rate in Hz, used when sync is off */
     rate: number
-    min: number
-    max: number
-    /** param registry id, e.g. 'filter.cutoff'. '' = unrouted */
-    target: string
+    /** lock the rate to transport tempo. Synced LFOs only run while the
+     *  transport does — that's what locking to it means. */
+    sync: boolean
+    division: Division
+    /**
+     * One LFO per voice, retriggered on note-on, so each note drifts
+     * independently. Off means a single shared LFO and every note moves in
+     * lockstep.
+     */
+    perVoice: boolean
     running: boolean
+}
+
+/** Stepped random / sample-and-hold. One global source. */
+export interface RandomState {
+    rate: number
+    sync: boolean
+    division: Division
+}
+
+/**
+ * One modulation connection. Depth is bipolar -1..1 and scaled by the
+ * destination's own `scale`, so depth is comparable across destinations and
+ * a negative value simply inverts.
+ */
+export interface ModRoute {
+    id: string
+    /** a fixed source id, or `lfo:<lfoId>` */
+    source: string
+    /** a key of MOD_DESTINATIONS */
+    destination: string
+    depth: number
+}
+
+export const MOD_SOURCE_IDS = ['modEnv', 'velocity', 'keyTrack', 'modWheel', 'random'] as const
+export type FixedModSource = typeof MOD_SOURCE_IDS[number]
+
+export const MOD_SOURCE_META: Record<FixedModSource, { label: string, perVoice: boolean }> = {
+    modEnv: { label: 'Mod Envelope', perVoice: true },
+    velocity: { label: 'Velocity', perVoice: true },
+    keyTrack: { label: 'Key Track', perVoice: true },
+    modWheel: { label: 'Mod Wheel', perVoice: false },
+    random: { label: 'Random S&H', perVoice: false },
+}
+
+/**
+ * Where modulation can go, and what a depth of 1.0 means there.
+ *
+ * Cutoff and pitch route to `detune` (cents, exponential) rather than
+ * frequency (linear Hz), so a given depth sweeps the same number of octaves
+ * wherever the knob happens to sit.
+ */
+export const MOD_DESTINATIONS: Record<string, { label: string, scale: number, unit: string }> = {
+    'filter.detune': { label: 'Filter Cutoff', scale: 4800, unit: 'cents' },
+    'filter.resonance': { label: 'Filter Reso', scale: 20, unit: '' },
+    'oscA.detune': { label: 'Osc A Pitch', scale: 1200, unit: 'cents' },
+    'oscB.detune': { label: 'Osc B Pitch', scale: 1200, unit: 'cents' },
+    'oscA.level': { label: 'Osc A Level', scale: 1, unit: '' },
+    'oscB.level': { label: 'Osc B Level', scale: 1, unit: '' },
+    'sub.level': { label: 'Sub Level', scale: 1, unit: '' },
+    'noise.level': { label: 'Noise Level', scale: 1, unit: '' },
+    'amp.pan': { label: 'Pan', scale: 1, unit: '' },
 }
 
 export interface PatchState {
@@ -112,7 +174,9 @@ export interface PatchState {
     ampEnv: EnvState
     modEnv: EnvState
     voice: VoiceState
+    random: RandomState
     lfos: LFOState[]
+    modRoutes: ModRoute[]
 }
 
 /* ------------------------------------------------------------------ */
@@ -162,8 +226,8 @@ export const VOICE_RANGES = {
 } as const
 
 export const LFO_RATE = { min: 0.01, max: 20 } as const
-/** Fallback bounds for the LFO depth knobs when no target is selected. */
-export const LFO_DEPTH = { min: -10000, max: 10000 } as const
+/** Modulation depth is bipolar and normalised; the destination scales it. */
+export const MOD_DEPTH = { min: -1, max: 1 } as const
 
 /** Integer-valued params — knobs snap, coercion rounds. */
 export const INTEGER_PARAMS = new Set(['octave', 'semi', 'count'])
@@ -230,11 +294,17 @@ export const DEFAULT_PATCH: PatchState = {
     ampEnv: { attack: 0.01, decay: 0.2, sustain: 0.7, release: 0.6 },
     modEnv: { attack: 0.01, decay: 0.3, sustain: 0.2, release: 0.4 },
     voice: { mode: 'poly', glide: 0, unison: 1, detune: 12, spread: 0.5 },
+    random: { rate: 4, sync: false, division: '8n' },
     lfos: [],
+    modRoutes: [],
 }
 
 export function createLFO(id: string): LFOState {
-    return { id, waveform: 'sine', rate: 1, min: 0, max: 1, target: '', running: true }
+    return { id, waveform: 'sine', rate: 1, sync: false, division: '8n', perVoice: false, running: true }
+}
+
+export function createRoute(id: string): ModRoute {
+    return { id, source: 'modEnv', destination: 'filter.detune', depth: 0 }
 }
 
 /* ------------------------------------------------------------------ */
@@ -307,6 +377,7 @@ export function coercePatch(raw: unknown): PatchState {
     const rawNoise = isRecord(raw.noise) ? raw.noise : {}
     const rawFilter = isRecord(raw.filter) ? raw.filter : {}
     const rawVoice = isRecord(raw.voice) ? raw.voice : {}
+    const rawRandom = isRecord(raw.random) ? raw.random : {}
 
     const seen = new Set<string>()
     const rawLfos = Array.isArray(raw.lfos) ? raw.lfos : []
@@ -321,10 +392,34 @@ export function coercePatch(raw: unknown): PatchState {
             id,
             waveform: pick(entry.waveform, WAVES, base.waveform),
             rate: num(entry.rate, base.rate, LFO_RATE),
-            min: num(entry.min, base.min, LFO_DEPTH),
-            max: num(entry.max, base.max, LFO_DEPTH),
-            target: str(entry.target, base.target),
+            sync: bool(entry.sync, base.sync),
+            division: pick(entry.division, DIVISIONS, base.division),
+            perVoice: bool(entry.perVoice, base.perVoice),
             running: bool(entry.running, base.running),
+        }
+    })
+
+    const routeIds = new Set<string>()
+    const rawRoutes = Array.isArray(raw.modRoutes) ? raw.modRoutes : []
+    const lfoIds = new Set(lfos.map(l => l.id))
+    const modRoutes: ModRoute[] = rawRoutes.filter(isRecord).map((entry, i) => {
+        const base = createRoute(`route-${i}`)
+        let id = str(entry.id, base.id)
+        while (routeIds.has(id)) id = `${id}-dup`
+        routeIds.add(id)
+        const source = str(entry.source, base.source)
+        // Drop routes whose source no longer exists — a deleted LFO, or a
+        // hand-edited file — rather than leaving a row that points nowhere.
+        const sourceOk = source.startsWith('lfo:')
+            ? lfoIds.has(source.slice(4))
+            : (MOD_SOURCE_IDS as readonly string[]).includes(source)
+        return {
+            id,
+            source: sourceOk ? source : base.source,
+            destination: str(entry.destination, base.destination) in MOD_DESTINATIONS
+                ? str(entry.destination, base.destination)
+                : base.destination,
+            depth: num(entry.depth, base.depth, MOD_DEPTH),
         }
     })
 
@@ -358,6 +453,12 @@ export function coercePatch(raw: unknown): PatchState {
             detune: num(rawVoice.detune, d.voice.detune, VOICE_RANGES.detune),
             spread: num(rawVoice.spread, d.voice.spread, VOICE_RANGES.spread),
         },
+        random: {
+            rate: num(rawRandom.rate, d.random.rate, LFO_RATE),
+            sync: bool(rawRandom.sync, d.random.sync),
+            division: pick(rawRandom.division, DIVISIONS, d.random.division),
+        },
         lfos,
+        modRoutes,
     }
 }

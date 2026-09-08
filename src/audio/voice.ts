@@ -1,8 +1,10 @@
 import * as Tone from 'tone'
 import {
     DEFAULT_PATCH,
+    MOD_DESTINATIONS,
     OSC_MODE_PARAMS,
     omniType,
+    type LFOState,
     type EnvState,
     type FilterState,
     type NoiseState,
@@ -42,6 +44,18 @@ export class Voice {
     private readonly modEnv: Tone.Envelope
     private readonly envAmount: Tone.Gain
     private readonly panner: Tone.Panner
+
+    /** Per-voice modulation sources, held at a constant while a note sounds. */
+    private readonly velocitySignal: Tone.Signal<'number'>
+    private readonly keyTrackSignal: Tone.Signal<'number'>
+    /** Per-voice LFO instances, keyed by LFO id. Only for perVoice LFOs. */
+    private readonly lfos = new Map<string, Tone.LFO>()
+    /** routeId -> the depth gain wiring one source into one destination */
+    private readonly routes = new Map<string, {
+        gain: Tone.Gain
+        source: Tone.ToneAudioNode
+        destination: string
+    }>()
 
     /** null when idle. Set on trigger, cleared on reclaim. */
     note: number | null = null
@@ -83,6 +97,8 @@ export class Voice {
         this.envAmount = new Tone.Gain(0)
         this.panner = new Tone.Panner(0)
         this.output = new Tone.Gain(1)
+        this.velocitySignal = new Tone.Signal(0)
+        this.keyTrackSignal = new Tone.Signal(0)
 
         this.oscA.connect(this.gainA)
         this.oscB.connect(this.gainB)
@@ -178,6 +194,94 @@ export class Voice {
     }
 
     /* -------------------------------------------------------------- */
+    /* Modulation                                                      */
+    /* -------------------------------------------------------------- */
+
+    /** The node behind a per-voice source id, or null if this voice has none. */
+    sourceNode(id: string): Tone.ToneAudioNode | null {
+        if (id.startsWith('lfo:')) return this.lfos.get(id.slice(4)) ?? null
+        switch (id) {
+            case 'modEnv': return this.modEnv
+            case 'velocity': return this.velocitySignal
+            case 'keyTrack': return this.keyTrackSignal
+            default: return null
+        }
+    }
+
+    /** Create or update this voice's private copy of a per-voice LFO. */
+    syncLFO(state: LFOState) {
+        let lfo = this.lfos.get(state.id)
+        if (!lfo) {
+            // -1..1 so every source reaches the matrix on the same scale.
+            lfo = new Tone.LFO({ min: -1, max: 1 })
+            this.lfos.set(state.id, lfo)
+        }
+        applyLFOSettings(lfo, state)
+    }
+
+    dropLFO(id: string) {
+        const lfo = this.lfos.get(id)
+        if (!lfo) return
+        lfo.dispose()
+        this.lfos.delete(id)
+    }
+
+    lfoIds(): string[] {
+        return [...this.lfos.keys()]
+    }
+
+    /**
+     * Wire one route. Reuses the existing gain when only depth changed, so
+     * dragging a depth knob doesn't churn audio nodes.
+     */
+    setRoute(routeId: string, source: Tone.ToneAudioNode | null, destination: string, depth: number) {
+        const meta = MOD_DESTINATIONS[destination]
+        const target = this.destinationParam(destination)
+        if (!source || !meta || !target) {
+            this.clearRoute(routeId)
+            return
+        }
+        const existing = this.routes.get(routeId)
+        if (existing && existing.source === source && existing.destination === destination) {
+            existing.gain.gain.value = depth * meta.scale
+            return
+        }
+        this.clearRoute(routeId)
+        const gain = new Tone.Gain(depth * meta.scale)
+        source.connect(gain)
+        gain.connect(target)
+        this.routes.set(routeId, { gain, source, destination })
+    }
+
+    clearRoute(routeId: string) {
+        const route = this.routes.get(routeId)
+        if (!route) return
+        try { route.source.disconnect(route.gain) } catch { /* already gone */ }
+        route.gain.dispose()
+        this.routes.delete(routeId)
+    }
+
+    routeIds(): string[] {
+        return [...this.routes.keys()]
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private destinationParam(id: string): Tone.Param<any> | Tone.Signal<any> | null {
+        switch (id) {
+            case 'filter.detune': return this.filter.detune
+            case 'filter.resonance': return this.filter.Q
+            case 'oscA.detune': return this.oscA.detune
+            case 'oscB.detune': return this.oscB.detune
+            case 'oscA.level': return this.gainA.gain
+            case 'oscB.level': return this.gainB.gain
+            case 'sub.level': return this.gainSub.gain
+            case 'noise.level': return this.gainNoise.gain
+            case 'amp.pan': return this.panner.pan
+            default: return null
+        }
+    }
+
+    /* -------------------------------------------------------------- */
     /* Playing                                                         */
     /* -------------------------------------------------------------- */
 
@@ -191,9 +295,18 @@ export class Voice {
         this.startedAt = Tone.now()
         this.applyPitch()
         this.applyKeyTrack()
+        this.velocitySignal.value = velocity
+        // -1..1 across the playable range, centred on middle C.
+        this.keyTrackSignal.value = Math.max(-1, Math.min(1, (note - 60) / 36))
         if (retrigger) {
             this.amp.triggerAttack(undefined, velocity)
             this.modEnv.triggerAttack()
+            // Restarting each voice's own LFOs is what makes notes drift
+            // independently rather than moving in lockstep.
+            for (const lfo of this.lfos.values()) {
+                lfo.stop()
+                lfo.start()
+            }
         }
     }
 
@@ -252,26 +365,42 @@ export class Voice {
     }
 
     dispose() {
+        for (const id of [...this.routes.keys()]) this.clearRoute(id)
+        for (const lfo of this.lfos.values()) lfo.dispose()
+        this.lfos.clear()
         for (const node of [
             this.oscA, this.oscB, this.sub, this.noise,
             this.gainA, this.gainB, this.gainSub, this.gainNoise,
             this.filter, this.amp, this.modEnv, this.envAmount,
-            this.panner, this.output,
+            this.panner, this.output, this.velocitySignal, this.keyTrackSignal,
         ]) {
             node.dispose()
         }
     }
 
-    /** Modulation destinations this voice exposes to the param registry. */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    get modTargets(): Record<string, Tone.Param<any> | Tone.Signal<any>> {
-        return {
-            'filter.cutoff': this.filter.frequency,
-            'filter.detune': this.filter.detune,
-            'filter.resonance': this.filter.Q,
-            'oscA.detune': this.oscA.detune,
-            'oscB.detune': this.oscB.detune,
-            'amp.pan': this.panner.pan,
-        }
+}
+
+/** Shared by per-voice and global LFO instances so they can't drift apart. */
+export function applyLFOSettings(lfo: Tone.LFO, state: LFOState) {
+    // Reset to a known state first: sync() and unsync() rewire the frequency
+    // signal, and start/stop mean different things on each side of that.
+    lfo.stop()
+    lfo.unsync()
+    lfo.type = state.waveform
+
+    if (state.sync) {
+        // Order matters. sync() captures the frequency signal's *current*
+        // value as its ratio against the transport's bpm, so the division has
+        // to be set first — assigning it afterwards overwrites the synced
+        // connection and the rate stops following tempo.
+        lfo.frequency.value = state.division
+        lfo.sync()
+        // A synced source is scheduled on the transport timeline, so it needs
+        // a transport position, not "now". It then runs only while the
+        // transport does.
+        if (state.running) lfo.start(0)
+    } else {
+        lfo.frequency.value = state.rate
+        if (state.running) lfo.start()
     }
 }

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { masterGain } from '../audio/master'
-import { MOD_TARGET_META, SynthEngine } from '../audio/synthEngine'
-import { getPatch, useSection } from '../state/patchStore'
-import { useParamRegistry } from './useParamRegistry'
+import { SynthEngine } from '../audio/synthEngine'
+import { getPatch, useLFOs, useSection, useSyncedRoutes } from '../state/patchStore'
 import { useMidi } from './useMidi'
 import { useKeyboard } from './useKeyboard'
 
@@ -15,7 +14,6 @@ import { useKeyboard } from './useKeyboard'
  */
 export function useSynthEngine() {
     const engineRef = useRef<SynthEngine | null>(null)
-    const { register, unregister } = useParamRegistry()
 
     // Declared first so the engine exists before the apply effects below run.
     useEffect(() => {
@@ -25,23 +23,11 @@ export function useSynthEngine() {
         // after a preset load doesn't flash the wrong sound.
         engine.applyPatch(getPatch())
         engineRef.current = engine
-
-        // Publish modulation destinations. Each id fans out across the pool.
-        const ids: string[] = []
-        for (const [id, targets] of engine.modTargets()) {
-            const meta = MOD_TARGET_META[id]
-            if (!meta) continue
-            const fullId = `synth.${id}`
-            register(fullId, { label: meta.label, targets, min: meta.min, max: meta.max, unit: meta.unit })
-            ids.push(fullId)
-        }
-
         return () => {
-            for (const id of ids) unregister(id)
             engine.dispose()
             engineRef.current = null
         }
-    }, [register, unregister])
+    }, [])
 
     const oscA = useSection('oscA')
     const oscB = useSection('oscB')
@@ -51,6 +37,9 @@ export function useSynthEngine() {
     const ampEnv = useSection('ampEnv')
     const modEnv = useSection('modEnv')
     const voice = useSection('voice')
+    const random = useSection('random')
+    const lfos = useLFOs()
+    const routes = useSyncedRoutes()
 
     useEffect(() => { engineRef.current?.applyOsc('a', oscA) }, [oscA])
     useEffect(() => { engineRef.current?.applyOsc('b', oscB) }, [oscB])
@@ -60,6 +49,10 @@ export function useSynthEngine() {
     useEffect(() => { engineRef.current?.applyAmpEnv(ampEnv) }, [ampEnv])
     useEffect(() => { engineRef.current?.applyModEnv(modEnv) }, [modEnv])
     useEffect(() => { engineRef.current?.applyVoice(voice) }, [voice])
+    useEffect(() => { engineRef.current?.applyRandom(random) }, [random])
+    // LFO nodes must exist before routes can point at them.
+    useEffect(() => { engineRef.current?.applyLFOs(lfos) }, [lfos])
+    useEffect(() => { engineRef.current?.applyRoutes(routes) }, [routes, lfos])
 
     const handleNoteOn = useCallback((midi: number, velocity: number) => {
         engineRef.current?.noteOn(midi, velocity)
@@ -69,6 +62,10 @@ export function useSynthEngine() {
         engineRef.current?.noteOff(midi)
     }, [])
 
-    useMidi({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff })
+    const handleControlChange = useCallback((cc: number, value: number) => {
+        if (cc === 1) engineRef.current?.setModWheel(value)
+    }, [])
+
+    useMidi({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff, onControlChange: handleControlChange })
     useKeyboard({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff })
 }
