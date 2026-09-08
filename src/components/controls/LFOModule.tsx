@@ -3,7 +3,7 @@ import * as Tone from 'tone'
 import { useParamRegistry, useParamRegistryVersion } from '../../hooks/useParamRegistry'
 import Knob from './Knob'
 import { removeLFO, updateLFO, useLFOState } from '../../state/patchStore'
-import { OSC_TYPES, LFO_RATE, LFO_DEPTH, type OscType } from '../../audio/patchTypes'
+import { WAVES, LFO_RATE, LFO_DEPTH, type Wave } from '../../audio/patchTypes'
 
 interface LFOModuleProps {
   id: string
@@ -67,11 +67,16 @@ function LFOModule({ id }: LFOModuleProps) {
     const entry = getAll().get(target)
     if (!entry) return
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    lfo.connect(entry.signal as any)
-    return () => {
+    // One destination id fans out across the whole voice pool.
+    for (const t of entry.targets) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      try { lfo.disconnect(entry.signal as any) } catch { /* already gone */ }
+      lfo.connect(t as any)
+    }
+    return () => {
+      for (const t of entry.targets) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        try { lfo.disconnect(t as any) } catch { /* already gone */ }
+      }
     }
   }, [target, registryVersion, getAll])
 
@@ -125,10 +130,10 @@ function LFOModule({ id }: LFOModuleProps) {
 
       {/* waveform selector */}
       <div style={{ display: 'flex', gap: 4 }}>
-        {OSC_TYPES.map(w => (
+        {WAVES.map(w => (
           <button
             key={w}
-            onClick={() => updateLFO(id, { waveform: w as OscType })}
+            onClick={() => updateLFO(id, { waveform: w as Wave })}
             style={{
               fontSize: 9,
               padding: '2px 6px',
@@ -205,7 +210,7 @@ function LFOModule({ id }: LFOModuleProps) {
 
       {target && (
         <div style={{ fontSize: 10, opacity: 0.4, textAlign: 'center' }}>
-          {state.min.toFixed(1)} → {state.max.toFixed(1)} @ {state.rate.toFixed(2)}hz
+          {state.min.toFixed(1)} → {state.max.toFixed(1)}{targetEntry?.unit ? ` ${targetEntry.unit}` : ''} @ {state.rate.toFixed(2)}hz
         </div>
       )}
     </div>

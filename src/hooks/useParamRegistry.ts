@@ -1,5 +1,5 @@
 import { useContext, useSyncExternalStore } from 'react'
-import { ParamRegistryContext } from '../context/ParamRegistry'
+import { ParamRegistryContext } from '../context/paramRegistryContext'
 
 export function useParamRegistry() {
     const ctx = useContext(ParamRegistryContext)

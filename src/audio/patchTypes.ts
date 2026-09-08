@@ -5,33 +5,98 @@
  * patch may live in component state, or it won't survive a save/load.
  */
 
-export const PATCH_VERSION = 1
+export const PATCH_VERSION = 2
 
-export const OSC_TYPES = ['sine', 'triangle', 'sawtooth', 'square'] as const
-export type OscType = typeof OSC_TYPES[number]
+export const WAVES = ['sine', 'triangle', 'sawtooth', 'square'] as const
+export type Wave = typeof WAVES[number]
 
-export const FILTER_TYPES = ['lowpass', 'highpass', 'bandpass'] as const
+/**
+ * How an oscillator slot uses its wave. Maps onto `Tone.OmniOscillator`'s
+ * type string — 'fat' gives detuned copies inside the node, 'fm'/'am' swap in
+ * the FM/AM oscillators, 'pulse' ignores the wave entirely.
+ *
+ * No 'pwm' mode: PWM is just pulse width modulated by an LFO, which the mod
+ * matrix does better in phase 2.
+ */
+export const OSC_MODES = ['basic', 'fat', 'fm', 'am', 'pulse'] as const
+export type OscMode = typeof OSC_MODES[number]
+
+export const FILTER_TYPES = ['lowpass', 'highpass', 'bandpass', 'notch'] as const
 export type FilterType = typeof FILTER_TYPES[number]
 
-export interface SynthState {
-    oscillator: OscType
-    volume: number
+export const NOISE_TYPES = ['white', 'pink', 'brown'] as const
+export type NoiseType = typeof NOISE_TYPES[number]
+
+export const VOICE_MODES = ['poly', 'mono', 'legato'] as const
+export type VoiceMode = typeof VOICE_MODES[number]
+
+export interface OscState {
+    mode: OscMode
+    wave: Wave
+    level: number
+    octave: number
+    semi: number
+    fine: number
+    /** pulse only */
+    width: number
+    /** fat only */
+    count: number
+    /** fat only */
+    spread: number
+    /** fm and am */
+    harmonicity: number
+    /** fm only */
+    modulationIndex: number
+}
+
+export interface SubState {
+    wave: Wave
+    /** octaves below the played note */
+    octave: number
+    level: number
+}
+
+export interface NoiseState {
+    type: NoiseType
+    level: number
+}
+
+export interface FilterState {
+    type: FilterType
+    cutoff: number
+    resonance: number
+    /** mod envelope depth, in cents — signed, so it can sweep downward */
+    envAmount: number
+    /** 0 = fixed cutoff, 1 = cutoff tracks the played pitch exactly */
+    keyTrack: number
+}
+
+export interface EnvState {
     attack: number
     decay: number
     sustain: number
     release: number
-    filterType: FilterType
-    filterCutoff: number
-    filterRes: number
+}
+
+export interface VoiceState {
+    mode: VoiceMode
+    /** portamento seconds */
+    glide: number
+    /** voices consumed per note; > 1 costs polyphony */
+    unison: number
+    /** total detune spread across a unison group, in cents */
+    detune: number
+    /** stereo spread across a unison group, 0..1 */
+    spread: number
 }
 
 export interface LFOState {
     id: string
-    waveform: OscType
+    waveform: Wave
     rate: number
     min: number
     max: number
-    /** param registry id, e.g. 'PolySynth.filterCutoff'. '' = unrouted */
+    /** param registry id, e.g. 'filter.cutoff'. '' = unrouted */
     target: string
     running: boolean
 }
@@ -39,54 +104,137 @@ export interface LFOState {
 export interface PatchState {
     version: number
     name: string
-    synth: SynthState
+    oscA: OscState
+    oscB: OscState
+    sub: SubState
+    noise: NoiseState
+    filter: FilterState
+    ampEnv: EnvState
+    modEnv: EnvState
+    voice: VoiceState
     lfos: LFOState[]
 }
 
-/** Knob bounds. Shared by the UI and by import clamping so they can't drift. */
-export const SYNTH_RANGES = {
-    volume: { min: -40, max: 0 },
-    attack: { min: 0, max: 2 },
-    decay: { min: 0, max: 2 },
+/* ------------------------------------------------------------------ */
+/* Ranges — shared by the knobs and by import clamping                 */
+/* ------------------------------------------------------------------ */
+
+export const OSC_RANGES = {
+    level: { min: 0, max: 1 },
+    octave: { min: -2, max: 2 },
+    semi: { min: -12, max: 12 },
+    fine: { min: -50, max: 50 },
+    width: { min: 0.01, max: 0.99 },
+    count: { min: 1, max: 7 },
+    spread: { min: 0, max: 100 },
+    harmonicity: { min: 0.25, max: 8 },
+    modulationIndex: { min: 0, max: 30 },
+} as const
+
+export const SUB_RANGES = {
+    octave: { min: 1, max: 2 },
+    level: { min: 0, max: 1 },
+} as const
+
+export const NOISE_RANGES = {
+    level: { min: 0, max: 1 },
+} as const
+
+export const FILTER_RANGES = {
+    cutoff: { min: 20, max: 18000 },
+    resonance: { min: 0.1, max: 20 },
+    envAmount: { min: -4800, max: 4800 },
+    keyTrack: { min: 0, max: 1 },
+} as const
+
+export const ENV_RANGES = {
+    attack: { min: 0.001, max: 4 },
+    decay: { min: 0.001, max: 4 },
     sustain: { min: 0, max: 1 },
-    release: { min: 0, max: 5 },
-    filterCutoff: { min: 100, max: 10000 },
-    filterRes: { min: 0.1, max: 20 },
+    release: { min: 0.001, max: 8 },
+} as const
+
+export const VOICE_RANGES = {
+    glide: { min: 0, max: 1 },
+    unison: { min: 1, max: 8 },
+    detune: { min: 0, max: 50 },
+    spread: { min: 0, max: 1 },
 } as const
 
 export const LFO_RATE = { min: 0.01, max: 20 } as const
-/** Fallback bounds for the LFO min/max knobs when no target is selected. */
+/** Fallback bounds for the LFO depth knobs when no target is selected. */
 export const LFO_DEPTH = { min: -10000, max: 10000 } as const
 
-export const DEFAULT_SYNTH: SynthState = {
-    oscillator: 'sawtooth',
-    volume: -12,
-    attack: 0.05,
-    decay: 0.2,
-    sustain: 0.5,
-    release: 0.8,
-    filterType: 'lowpass',
-    filterCutoff: 4000,
-    filterRes: 1,
+/** Integer-valued params — knobs snap, coercion rounds. */
+export const INTEGER_PARAMS = new Set(['octave', 'semi', 'count'])
+
+/* ------------------------------------------------------------------ */
+/* Which oscillator params are live for which mode                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `Tone.OmniOscillator` *throws* when you set a param the current type
+ * doesn't have — setting `modulationIndex` on a sawtooth is an error, not a
+ * no-op. The patch stores every param regardless; the apply layer consults
+ * this table before writing.
+ */
+export const OSC_MODE_PARAMS: Record<OscMode, readonly (keyof OscState)[]> = {
+    basic: [],
+    fat: ['count', 'spread'],
+    fm: ['harmonicity', 'modulationIndex'],
+    am: ['harmonicity'],
+    pulse: ['width'],
+}
+
+/** The `Tone.OmniOscillator` type string for an oscillator's mode + wave. */
+export function omniType(osc: OscState): string {
+    switch (osc.mode) {
+        case 'basic': return osc.wave
+        case 'fat': return `fat${osc.wave}`
+        case 'fm': return `fm${osc.wave}`
+        case 'am': return `am${osc.wave}`
+        case 'pulse': return 'pulse'
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Defaults                                                            */
+/* ------------------------------------------------------------------ */
+
+function defaultOsc(overrides: Partial<OscState> = {}): OscState {
+    return {
+        mode: 'basic',
+        wave: 'sawtooth',
+        level: 0.8,
+        octave: 0,
+        semi: 0,
+        fine: 0,
+        width: 0.5,
+        count: 3,
+        spread: 20,
+        harmonicity: 1,
+        modulationIndex: 5,
+        ...overrides,
+    }
 }
 
 export const DEFAULT_PATCH: PatchState = {
     version: PATCH_VERSION,
     name: 'Init',
-    synth: DEFAULT_SYNTH,
+    oscA: defaultOsc(),
+    // B detuned a touch so the default patch already beats slightly
+    oscB: defaultOsc({ level: 0.5, fine: 7 }),
+    sub: { wave: 'square', octave: 1, level: 0 },
+    noise: { type: 'white', level: 0 },
+    filter: { type: 'lowpass', cutoff: 4000, resonance: 1, envAmount: 0, keyTrack: 0 },
+    ampEnv: { attack: 0.01, decay: 0.2, sustain: 0.7, release: 0.6 },
+    modEnv: { attack: 0.01, decay: 0.3, sustain: 0.2, release: 0.4 },
+    voice: { mode: 'poly', glide: 0, unison: 1, detune: 12, spread: 0.5 },
     lfos: [],
 }
 
 export function createLFO(id: string): LFOState {
-    return {
-        id,
-        waveform: 'sine',
-        rate: 1,
-        min: 0,
-        max: 1,
-        target: '',
-        running: true,
-    }
+    return { id, waveform: 'sine', rate: 1, min: 0, max: 1, target: '', running: true }
 }
 
 /* ------------------------------------------------------------------ */
@@ -97,11 +245,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
     return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-function num(v: unknown, fallback: number, range?: { min: number, max: number }): number {
+function num(v: unknown, fallback: number, range?: { min: number, max: number }, integer = false): number {
     const n = typeof v === 'number' ? v : Number(v)
     if (!Number.isFinite(n)) return fallback
-    if (!range) return n
-    return Math.min(range.max, Math.max(range.min, n))
+    const clamped = range ? Math.min(range.max, Math.max(range.min, n)) : n
+    return integer ? Math.round(clamped) : clamped
 }
 
 function pick<T extends string>(v: unknown, options: readonly T[], fallback: T): T {
@@ -116,28 +264,49 @@ function str(v: unknown, fallback: string): string {
     return typeof v === 'string' ? v : fallback
 }
 
+function coerceOsc(raw: unknown, base: OscState): OscState {
+    const r = isRecord(raw) ? raw : {}
+    return {
+        mode: pick(r.mode, OSC_MODES, base.mode),
+        wave: pick(r.wave, WAVES, base.wave),
+        level: num(r.level, base.level, OSC_RANGES.level),
+        octave: num(r.octave, base.octave, OSC_RANGES.octave, true),
+        semi: num(r.semi, base.semi, OSC_RANGES.semi, true),
+        fine: num(r.fine, base.fine, OSC_RANGES.fine),
+        width: num(r.width, base.width, OSC_RANGES.width),
+        count: num(r.count, base.count, OSC_RANGES.count, true),
+        spread: num(r.spread, base.spread, OSC_RANGES.spread),
+        harmonicity: num(r.harmonicity, base.harmonicity, OSC_RANGES.harmonicity),
+        modulationIndex: num(r.modulationIndex, base.modulationIndex, OSC_RANGES.modulationIndex),
+    }
+}
+
+function coerceEnv(raw: unknown, base: EnvState): EnvState {
+    const r = isRecord(raw) ? raw : {}
+    return {
+        attack: num(r.attack, base.attack, ENV_RANGES.attack),
+        decay: num(r.decay, base.decay, ENV_RANGES.decay),
+        sustain: num(r.sustain, base.sustain, ENV_RANGES.sustain),
+        release: num(r.release, base.release, ENV_RANGES.release),
+    }
+}
+
 /**
  * Turn arbitrary parsed JSON into a valid PatchState.
  *
  * Preset files are user-editable and travel between machines, so anything
  * missing, mistyped or out of range falls back to the default rather than
- * reaching a Tone node. Never throws.
+ * reaching a Tone node — several of which throw on a bad value rather than
+ * ignoring it. Never throws.
  */
 export function coercePatch(raw: unknown): PatchState {
-    if (!isRecord(raw)) return { ...DEFAULT_PATCH }
+    if (!isRecord(raw)) return structuredClone(DEFAULT_PATCH)
+    const d = DEFAULT_PATCH
 
-    const rawSynth = isRecord(raw.synth) ? raw.synth : {}
-    const synth: SynthState = {
-        oscillator: pick(rawSynth.oscillator, OSC_TYPES, DEFAULT_SYNTH.oscillator),
-        volume: num(rawSynth.volume, DEFAULT_SYNTH.volume, SYNTH_RANGES.volume),
-        attack: num(rawSynth.attack, DEFAULT_SYNTH.attack, SYNTH_RANGES.attack),
-        decay: num(rawSynth.decay, DEFAULT_SYNTH.decay, SYNTH_RANGES.decay),
-        sustain: num(rawSynth.sustain, DEFAULT_SYNTH.sustain, SYNTH_RANGES.sustain),
-        release: num(rawSynth.release, DEFAULT_SYNTH.release, SYNTH_RANGES.release),
-        filterType: pick(rawSynth.filterType, FILTER_TYPES, DEFAULT_SYNTH.filterType),
-        filterCutoff: num(rawSynth.filterCutoff, DEFAULT_SYNTH.filterCutoff, SYNTH_RANGES.filterCutoff),
-        filterRes: num(rawSynth.filterRes, DEFAULT_SYNTH.filterRes, SYNTH_RANGES.filterRes),
-    }
+    const rawSub = isRecord(raw.sub) ? raw.sub : {}
+    const rawNoise = isRecord(raw.noise) ? raw.noise : {}
+    const rawFilter = isRecord(raw.filter) ? raw.filter : {}
+    const rawVoice = isRecord(raw.voice) ? raw.voice : {}
 
     const seen = new Set<string>()
     const rawLfos = Array.isArray(raw.lfos) ? raw.lfos : []
@@ -150,7 +319,7 @@ export function coercePatch(raw: unknown): PatchState {
         seen.add(id)
         return {
             id,
-            waveform: pick(entry.waveform, OSC_TYPES, base.waveform),
+            waveform: pick(entry.waveform, WAVES, base.waveform),
             rate: num(entry.rate, base.rate, LFO_RATE),
             min: num(entry.min, base.min, LFO_DEPTH),
             max: num(entry.max, base.max, LFO_DEPTH),
@@ -161,8 +330,34 @@ export function coercePatch(raw: unknown): PatchState {
 
     return {
         version: PATCH_VERSION,
-        name: str(raw.name, DEFAULT_PATCH.name),
-        synth,
+        name: str(raw.name, d.name),
+        oscA: coerceOsc(raw.oscA, d.oscA),
+        oscB: coerceOsc(raw.oscB, d.oscB),
+        sub: {
+            wave: pick(rawSub.wave, WAVES, d.sub.wave),
+            octave: num(rawSub.octave, d.sub.octave, SUB_RANGES.octave, true),
+            level: num(rawSub.level, d.sub.level, SUB_RANGES.level),
+        },
+        noise: {
+            type: pick(rawNoise.type, NOISE_TYPES, d.noise.type),
+            level: num(rawNoise.level, d.noise.level, NOISE_RANGES.level),
+        },
+        filter: {
+            type: pick(rawFilter.type, FILTER_TYPES, d.filter.type),
+            cutoff: num(rawFilter.cutoff, d.filter.cutoff, FILTER_RANGES.cutoff),
+            resonance: num(rawFilter.resonance, d.filter.resonance, FILTER_RANGES.resonance),
+            envAmount: num(rawFilter.envAmount, d.filter.envAmount, FILTER_RANGES.envAmount),
+            keyTrack: num(rawFilter.keyTrack, d.filter.keyTrack, FILTER_RANGES.keyTrack),
+        },
+        ampEnv: coerceEnv(raw.ampEnv, d.ampEnv),
+        modEnv: coerceEnv(raw.modEnv, d.modEnv),
+        voice: {
+            mode: pick(rawVoice.mode, VOICE_MODES, d.voice.mode),
+            glide: num(rawVoice.glide, d.voice.glide, VOICE_RANGES.glide),
+            unison: num(rawVoice.unison, d.voice.unison, VOICE_RANGES.unison, true),
+            detune: num(rawVoice.detune, d.voice.detune, VOICE_RANGES.detune),
+            spread: num(rawVoice.spread, d.voice.spread, VOICE_RANGES.spread),
+        },
         lfos,
     }
 }

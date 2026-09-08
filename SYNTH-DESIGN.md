@@ -260,7 +260,7 @@ Each phase should end with something audible.
 
 | # | Phase | Contains | Rough size |
 |---|---|---|---|
-| 1 | **Voice pool** | `Voice`, group allocator, stealing, unison/detune/spread, 2 osc + sub + noise, filter, amp + mod envelope. Replaces `Tone.PolySynth` entirely. | ~550 lines |
+| 1 | ~~**Voice pool**~~ **DONE** | `Voice`, group allocator, stealing, unison/detune/spread, 2 osc + sub + noise, filter, amp + mod envelope. `Tone.PolySynth` is gone. | landed |
 | 2 | **Mod matrix** | Destination descriptors, routes, depth gains, `detune` routing, per-voice LFOs. Retires the LFO target dropdown. | ~300 lines |
 | 3 | **Playability** | Glide, mono/legato note priority, velocity routing. Unison itself lands in phase 1 with the allocator. | small |
 | 4 | **Effects chain** | Drive/waveshaper, chorus, delay, reverb, wet knobs, as patch state. | ~250 lines |

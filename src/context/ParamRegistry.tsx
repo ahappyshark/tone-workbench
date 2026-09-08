@@ -1,24 +1,6 @@
-import { createContext, useCallback, useMemo, useRef } from 'react'
-import type { ReactNode } from 'react';
-import * as Tone from 'tone'
-
-export interface RegisteredParam { 
-    label: string
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    signal: Tone.ToneAudioNode | Tone.Signal<any> | Tone.Param<any>
-    min?: number
-    max?: number
-}
-
-export interface ParamRegistryContextType {
-    register: (id: string, param: RegisteredParam) => void
-    unregister: (id: string) => void
-    getAll: () => Map<string, RegisteredParam>
-    subscribe: (listener: () => void) => () => void
-    getVersion: () => number
-}
-
-export const ParamRegistryContext = createContext<ParamRegistryContextType | null>(null)
+import { useCallback, useMemo, useRef } from 'react'
+import type { ReactNode } from 'react'
+import { ParamRegistryContext, type RegisteredParam } from './paramRegistryContext'
 
 export function ParamRegistryProvider({ children }: { children: ReactNode }) {
     const registry = useRef<Map<string, RegisteredParam>>(new Map())

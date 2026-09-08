@@ -4,7 +4,6 @@ import {
     createLFO,
     type LFOState,
     type PatchState,
-    type SynthState,
 } from '../audio/patchTypes'
 
 /**
@@ -14,13 +13,17 @@ import {
  * graph, and keeping it outside React means a knob drag can't re-render the
  * tree above it (which is what was retriggering notes before).
  *
- * Updates are immutable and replace only the slice that changed, so
- * useSyncExternalStore snapshots stay reference-stable for untouched slices.
+ * Updates are immutable and replace only the section that changed, so
+ * useSyncExternalStore snapshots stay reference-stable for untouched sections
+ * — that's what keeps a filter tweak from re-running the oscillator effects.
  */
 
 type Listener = () => void
 
-let patch: PatchState = DEFAULT_PATCH
+/** The patch sections that hold plain parameter records. */
+export type SectionKey = 'oscA' | 'oscB' | 'sub' | 'noise' | 'filter' | 'ampEnv' | 'modEnv' | 'voice'
+
+let patch: PatchState = structuredClone(DEFAULT_PATCH)
 const listeners = new Set<Listener>()
 
 function setPatch(next: PatchState) {
@@ -41,9 +44,14 @@ export function getPatch(): PatchState {
 /* Actions                                                             */
 /* ------------------------------------------------------------------ */
 
-export function setSynthParam<K extends keyof SynthState>(key: K, value: SynthState[K]) {
-    if (patch.synth[key] === value) return
-    setPatch({ ...patch, synth: { ...patch.synth, [key]: value } })
+export function setParam<S extends SectionKey, K extends keyof PatchState[S]>(
+    section: S,
+    key: K,
+    value: PatchState[S][K],
+) {
+    const current = patch[section]
+    if (current[key] === value) return
+    setPatch({ ...patch, [section]: { ...current, [key]: value } })
 }
 
 export function updateLFO(id: string, changes: Partial<Omit<LFOState, 'id'>>) {
@@ -83,8 +91,8 @@ export function loadPatch(next: PatchState) {
 /* Hooks                                                               */
 /* ------------------------------------------------------------------ */
 
-export function useSynthState(): SynthState {
-    return useSyncExternalStore(subscribe, () => patch.synth)
+export function useSection<S extends SectionKey>(section: S): PatchState[S] {
+    return useSyncExternalStore(subscribe, () => patch[section])
 }
 
 export function useLFOState(id: string): LFOState | undefined {
@@ -104,3 +112,10 @@ export function useLFOIds(): string[] {
 export function usePatchName(): string {
     return useSyncExternalStore(subscribe, () => patch.name)
 }
+
+/** Fires on any patch change. For the engine bridge, which needs all of it. */
+export function usePatch(): PatchState {
+    return useSyncExternalStore(subscribe, getPatch)
+}
+
+export { subscribe as subscribeToPatch }

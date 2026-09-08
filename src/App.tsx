@@ -2,7 +2,7 @@ import { useState } from 'react'
 import * as Tone from 'tone'
 import TransportControls from './components/TransportControls'
 import Visualizer from './components/Visualizer'
-import PolySynth from './components/PolySynth'
+import SynthPanel from './components/SynthPanel'
 import LFORack from './components/LFORack'
 import PresetBar from './components/PresetBar'
 
@@ -24,7 +24,7 @@ function App() {
           <TransportControls />
           <Visualizer />
           <PresetBar />
-          <PolySynth />
+          <SynthPanel />
           <LFORack />
         </>
       }

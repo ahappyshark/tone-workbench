@@ -175,14 +175,14 @@ than cast away:
 Lint is down to four errors, all in files the synth engine rewrites
 (`PolySynth`, `ParamRegistry`, `useRegisterParam`).
 
-### 12. `useRegisterParam` only depends on `ready` — **OPEN**
+### 12. `useRegisterParam` only depends on `ready` — **RESOLVED (deleted)**
 
-`getParams` isn't memoised and isn't in the dep array, so params are captured
-once when `ready` flips. Fine while every registered param is a stable node
-reference; a stale-closure bug waiting to happen the moment a patch registers
-params that can change identity.
+Moot as of phase 1. The engine is now the only source of modulation
+destinations and registers them directly inside the effect that builds the
+voice pool, so there is no `ready` flag and no deferred `getParams` closure.
+The hook had no callers left and was deleted.
 
-### 13. `RegisteredParam.signal` is `any` — **DEFERRED**
+### 13. `RegisteredParam.targets` is `any` — **DEFERRED**
 
 `Tone.Signal<any> | Tone.Param<any>` with `as any` at both connect and
 disconnect. Tone's param generics don't unify cleanly across units
@@ -258,3 +258,22 @@ release one of two held keys: last-note, low-note, or high-note priority. They
 sound meaningfully different under a trill and every hardware mono synth picks
 one. Default to last-note (most intuitive on a keyboard); worth exposing per
 patch only if a variant actually wants otherwise.
+
+### 19. Oscillators run continuously — **OPEN**
+
+Every voice's sources are started once and gated by the amp envelope, because
+starting and stopping them per note clicks. That means 16 voices × (2 osc +
+sub + noise) are always generating, and `fat` mode multiplies the oscillator
+count by up to 7 per slot — a patch with both slots on `fat`/count 7 is
+running 224 oscillators before the sub and noise.
+
+No audible problem yet. If crackle ever shows up this is the first suspect,
+and the fix is to stop a voice's sources once its release tail is spent (the
+`isSpent` check the sweep already uses) and restart them on trigger.
+
+### 20. Velocity only reaches the amp envelope — **OPEN**
+
+`triggerAttack(time, velocity)` scales the amp envelope and nothing else.
+Velocity to filter cutoff is the single most expressive routing on most synths
+and is currently missing. It belongs in the phase 2 mod matrix as a source
+rather than being special-cased now.
