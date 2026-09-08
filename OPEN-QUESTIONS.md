@@ -11,7 +11,7 @@ Status: **OPEN** (undecided) · **DECIDED** (settled, kept for the rationale) ·
 
 ## Modulation
 
-### 1. LFO modulation is additive, and the UI doesn't say so — **OPEN**
+### 1. LFO modulation is additive, and the UI doesn't say so — **DECIDED → (b)**
 
 Connecting a `Tone.LFO` to a param *sums* with that param's base value; it does
 not replace it. So a cutoff of 4000 with an LFO of `100 → 10000` actually
@@ -35,20 +35,29 @@ Options:
   most hardware actually behaves, and it's less machinery than (a).
 - **(c) Leave it, fix the label only.** Print the real resulting range.
 
-Recommendation: **(b)**. It's the smaller change, it matches hardware
-intuition, and "knob sets the centre, LFO wobbles around it" is the mental
-model that survives contact with a modulation matrix. (a) fights the platform —
-Web Audio param summing is the native behaviour, and suppressing it means
-special-casing every knob.
+**Decided: (b), bipolar depth.** Settled by `SYNTH-DESIGN.md` rather than by
+argument — once modulation goes through a matrix, summing *is* the natural
+semantics and any other answer needs special-casing at every knob. The min/max
+knob pair is replaced by a single signed depth; the knob sets the centre.
 
-Blocks: a proper mod matrix, since depth semantics have to be settled before
-multiple sources can share a destination.
+Two consequences worth recording:
 
-### 2. Can two LFOs target the same param? — **OPEN**
+- Sources normalise to −1..1 and each destination declares what depth `1.0`
+  means in its own units, so depth is comparable across destinations.
+- Pitch and cutoff modulation route to `detune` (a `Signal<"cents">`, which is
+  exponential) instead of `frequency` (linear Hz). Without that, the same depth
+  is a four-octave lurch at 200Hz and inaudible at 8kHz.
 
-Nothing prevents it today and they'd sum, which is musically fine and arguably
-a feature. But the depth knobs snap to the param's range on selection, so two
-sources both snapped to `100 → 10000` will scream. Related to #1.
+Lands in phase 2 of the build. Until then the current additive behaviour and
+its wrong readout stay as-is.
+
+### 2. Can two LFOs target the same param? — **DECIDED (yes)**
+
+Nothing prevents it today and they sum, which is musically useful. The current
+hazard is only that depth knobs snap to the param's full range on selection, so
+two sources both snapped to `100 → 10000` will scream. Bipolar depth (#1)
+removes the snap and the hazard with it — multiple routes to one destination
+becomes a normal, intended thing.
 
 ### 3. Tempo-synced LFO rates — **DEFERRED**
 
@@ -67,17 +76,23 @@ strategy is `coercePatch()`: unknown fields are dropped, missing fields take
 their default. That's genuinely sufficient for *additive* changes — an old
 preset loaded into a newer app just gets defaults for the new controls.
 
-It is **not** sufficient for renames or unit changes (e.g. if cutoff ever
-becomes a normalised 0..1 taper, see #10). At that point `coercePatch` needs a
-real `if (raw.version < 2)` branch before the field mapping. Leaving the
-version field in place now is what makes that possible later.
+It is **not** sufficient for renames or unit changes. That case is no longer
+hypothetical: phase 1 of `SYNTH-DESIGN.md` moves `attack`/`decay`/`sustain`/
+`release` under `ampEnv` and `filterCutoff`/`filterRes` under `filter`. That's
+a rename, so **v2 needs a real `if (raw.version < 2)` branch** remapping the
+flat fields before coercion. Units stay in Hz and seconds, so it's a pure field
+move — write it when phase 1 lands, not after.
 
 ### 5. Factory presets — **OPEN**
 
 Nothing ships with the app; first run is always `Init`. A `src/presets/*.json`
 set loaded into the bank on first boot would give the workbench something to
-make noise with immediately, and doubles as regression fixtures. Cheap, but it
-needs #10 settled first or every shipped preset needs rewriting.
+make noise with immediately, and doubles as regression fixtures.
+
+Now upgraded in importance: `SYNTH-DESIGN.md` makes the two planned variants
+(**Shark Ambient**, **Shark Aggro**) *preset packs on one engine* rather than
+forks of the code, so the factory-preset mechanism is how variants ship at all.
+Blocked until phase 1 lands, since the schema is about to change shape.
 
 ### 6. Save silently overwrites — **OPEN**
 
@@ -108,7 +123,7 @@ Options: delete them; move them to a `sandbox/` excluded from the build; or
 harvest the good parts into the main synth and then delete. The imports should
 come out of `App.tsx` either way.
 
-### 9. One global patch, or many instruments? — **OPEN**
+### 9. One global patch, or many instruments? — **DEFERRED**
 
 `patchStore` is a module singleton holding exactly one synth. That is the right
 call for a workbench and the wrong call for anything multi-timbral. If layered
@@ -130,6 +145,10 @@ first few pixels. Real synths use a logarithmic taper.
 Fix: add a `taper?: 'linear' | 'log'` prop to `Knob` mapping through
 `log`/`exp`, and use it for cutoff, LFO rate, and any time value. Changes no
 stored data (values stay in Hz) — but see #4 if the *stored unit* ever changes.
+
+Note this is a *separate* problem from #1's `detune` routing, which only fixes
+the modulation path. The knob itself is still linear under the finger. Both
+need doing.
 
 Same component, smaller: no fine-drag modifier (shift = 10× precision), no
 keyboard or ARIA support, and `onPointerLeave` ends a drag, so dragging past
@@ -155,3 +174,44 @@ params that can change identity.
 disconnect. Tone's param generics don't unify cleanly across units
 (`frequency` vs `positive` vs `decibels`); a discriminated union keyed on unit
 would type it properly. Low value until the mod matrix exists.
+
+---
+
+## Synth engine
+
+Raised by `SYNTH-DESIGN.md`. These only become live once phase 1 starts.
+
+### 14. Voice count: fixed, or user-facing? — **OPEN**
+
+Default 8. Changing it is the one operation that must rebuild the whole pool,
+so it can't be a knob you sweep during playback — it needs to be a discrete
+setting that stops all voices first. Is it patch state (a pad wants 8, a bass
+wants 1) or an app-level preference? Leaning patch state, since the variants
+will disagree about it.
+
+### 15. Is unison `fat*` oscillators, or real per-voice stacking? — **OPEN**
+
+`Tone.OmniOscillator`'s `fat*` types give `count` detuned copies with a
+`spread`, for free, inside one node. Real per-voice stacking (N voices per note,
+each with its own filter and envelope) sounds better and costs N× the voices
+plus a much more complicated allocator.
+
+Leaning `fat*` plus a `Tone.StereoWidener` for width — it's most of the sound
+for a fraction of the work, and `FatOscillator` is mono so width needs solving
+either way. Revisit if the ambient variant sounds thin.
+
+### 16. Does the mod matrix get a UI, or stay a list? — **OPEN**
+
+A route is `{source, destination, depth}`. A flat "add route" list is trivial
+and scales badly past ~8 routes; a grid is the classic answer and is a real
+chunk of UI work. Start with the list, since the routes themselves are the
+interesting part and the list is throwaway.
+
+### 17. What actually makes the two variants different? — **OPEN**
+
+The design says variants are preset packs, not forks. Unresolved: whether
+either variant needs a module the other never touches — a generative sequencer
+for ambient is the obvious candidate. If so it's an *optional module in one
+engine* (a flag in `PatchState`), never a second engine. Worth checking after
+phase 4 whether the packs actually sound distinct, or whether the engine is
+missing something that only one of them needs.
