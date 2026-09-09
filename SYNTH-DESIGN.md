@@ -339,5 +339,8 @@ trigger decides where their phase comes from.
   needs crossfading custom waves per voice. Revisit if the aggressive variant
   demands it.
 - **Per-voice effects.** See signal flow.
-- **Sample playback.** `GrainPatch` already exists as a sandbox; folding
-  granular into the voice pool is its own design.
+- **Sample playback.** Granular became its own instrument rather than a
+  source inside this voice — see `GRAIN-DESIGN.md`. It reuses `FxRack`
+  unchanged and the same store, pool and modulation patterns, but its params
+  are read by a scheduler rather than summed into audio params, which is a
+  different enough problem to keep out of `Voice`.

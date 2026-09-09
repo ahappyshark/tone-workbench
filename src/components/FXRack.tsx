@@ -1,15 +1,6 @@
 import Knob from './controls/Knob'
 import Selector from './controls/Selector'
-import {
-    addFx,
-    moveFx,
-    removeFx,
-    setFxParam,
-    updateFx,
-    useFxIds,
-    useFxSlot,
-    useSyncedRoutes,
-} from '../state/patchStore'
+import type { InstrumentStore } from '../state/instrumentStore'
 import {
     FX_LABELS,
     FX_MOD_PARAMS,
@@ -40,13 +31,14 @@ const PARAM_PRECISION: Partial<Record<keyof FxParams, number>> = {
     preDelay: 3,
 }
 
-function FxSlotPanel({ id, index, count, modCount }: {
+function FxSlotPanel({ store, id, index, count, modCount }: {
+    store: InstrumentStore
     id: string
     index: number
     count: number
     modCount: number
 }) {
-    const slot = useFxSlot(id)
+    const slot = store.useFxSlot(id)
     if (!slot) return null
 
     const defaults = defaultFxParams()
@@ -71,26 +63,26 @@ function FxSlotPanel({ id, index, count, modCount }: {
                 </span>
                 <div style={{ display: 'flex', gap: 4 }}>
                     <button
-                        onClick={() => moveFx(id, -1)}
+                        onClick={() => store.moveFx(id, -1)}
                         disabled={index === 0}
                         title="earlier in the chain"
                         style={{ fontSize: 10, opacity: index === 0 ? 0.3 : 1 }}
                     >↑</button>
                     <button
-                        onClick={() => moveFx(id, 1)}
+                        onClick={() => store.moveFx(id, 1)}
                         disabled={index === count - 1}
                         title="later in the chain"
                         style={{ fontSize: 10, opacity: index === count - 1 ? 0.3 : 1 }}
                     >↓</button>
                     <button
-                        onClick={() => updateFx(id, { enabled: !slot.enabled })}
+                        onClick={() => store.updateFx(id, { enabled: !slot.enabled })}
                         style={{ fontSize: 10, color: slot.enabled ? '#00ff88' : '#888' }}
                     >{slot.enabled ? 'on' : 'byp'}</button>
-                    <button onClick={() => removeFx(id)} style={{ fontSize: 10, color: '#ff4444' }}>✕</button>
+                    <button onClick={() => store.removeFx(id)} style={{ fontSize: 10, color: '#ff4444' }}>✕</button>
                 </div>
             </div>
 
-            <Selector options={FX_TYPES} value={slot.type} onChange={t => updateFx(id, { type: t })} />
+            <Selector options={FX_TYPES} value={slot.type} onChange={t => store.updateFx(id, { type: t })} />
 
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 <Knob
@@ -99,7 +91,7 @@ function FxSlotPanel({ id, index, count, modCount }: {
                     max={FX_RANGES.wet.max}
                     value={slot.wet}
                     defaultValue={0.3}
-                    onChange={v => updateFx(id, { wet: v })}
+                    onChange={v => store.updateFx(id, { wet: v })}
                     size={48}
                 />
                 {/* Only the params this effect actually has. The patch keeps
@@ -112,7 +104,7 @@ function FxSlotPanel({ id, index, count, modCount }: {
                         max={FX_RANGES[param].max}
                         value={slot.params[param]}
                         defaultValue={defaults[param]}
-                        onChange={v => setFxParam(id, param, v)}
+                        onChange={v => store.setFxParam(id, param, v)}
                         size={48}
                         color={PARAM_COLORS[param]}
                         precision={PARAM_PRECISION[param]}
@@ -129,15 +121,15 @@ function FxSlotPanel({ id, index, count, modCount }: {
     )
 }
 
-function FXRack() {
-    const fxIds = useFxIds()
-    const routes = useSyncedRoutes()
+function FXRack({ store }: { store: InstrumentStore }) {
+    const fxIds = store.useFxIds()
+    const routes = store.useRoutes()
 
     return (
         <div style={{ marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
                 <h3 style={{ margin: 0 }}>FX Chain</h3>
-                <button onClick={() => addFx()}>+ Add FX</button>
+                <button onClick={() => store.addFx()}>+ Add FX</button>
                 <span style={{ fontSize: 9, opacity: 0.35 }}>
                     left to right is the signal path · one chain, after the voices are summed
                 </span>
@@ -146,6 +138,7 @@ function FXRack() {
                 {fxIds.map((id, i) => (
                     <FxSlotPanel
                         key={id}
+                        store={store}
                         id={id}
                         index={i}
                         count={fxIds.length}

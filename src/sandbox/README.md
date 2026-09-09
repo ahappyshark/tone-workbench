@@ -7,7 +7,7 @@ reference because several contain working solutions worth harvesting:
 | file | what it proved |
 |---|---|
 | `XYPatch.tsx` | FM, AM and pulse-width oscillator configs, switchable |
-| `GrainPatch.tsx` | `Tone.GrainPlayer` with file loading and a reverb send |
+| `GrainPatch.tsx` | `Tone.GrainPlayer` with file loading and a reverb send — **superseded** by the Grain Lab, which proved `GrainPlayer` can't do position, spray, density or reverse at all (see `GRAIN-DESIGN.md`) |
 | `ArpPatch.tsx` | `Tone.Transport`-scheduled arpeggiation |
 | `SequencerPatch.tsx` | step sequencing against the transport |
 | `PolyPatch.tsx`, `SynthPatch.tsx`, `SynthTestPatch.tsx` | early polyphony and voice probes |

@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { masterGain } from '../audio/master'
+import { noteBus } from '../audio/noteBus'
 import { SynthEngine } from '../audio/synthEngine'
 import { getPatch, useFx, useLFOs, useSection, useSyncedRoutes } from '../state/patchStore'
-import { useMidi } from './useMidi'
-import { useKeyboard } from './useKeyboard'
 
 /**
  * Owns the synth engine and keeps it in step with the patch store.
@@ -12,9 +11,11 @@ import { useKeyboard } from './useKeyboard'
  * oscillators. That works because the store replaces only the section that
  * changed, leaving every other section reference-stable.
  *
- * @returns the computer keyboard's current octave shift, for the UI to show.
+ * Input arrives through `noteBus` rather than being grabbed here: two
+ * instruments can be alive at once, and each owning its own copy of the
+ * keyboard listener would play every keypress twice.
  */
-export function useSynthEngine(): number {
+export function useSynthEngine(): void {
     const engineRef = useRef<SynthEngine | null>(null)
 
     // Declared first so the engine exists before the apply effects below run.
@@ -25,7 +26,19 @@ export function useSynthEngine(): number {
         // after a preset load doesn't flash the wrong sound.
         engine.applyPatch(getPatch())
         engineRef.current = engine
+        noteBus.register('shark', {
+            noteOn: (midi, velocity) => engine.noteOn(midi, velocity),
+            noteOff: midi => engine.noteOff(midi),
+            controlChange: (cc, value) => {
+                if (cc === 1) engine.setModWheel(value)
+                // CC64: anything from half-press up counts as down, per the spec.
+                if (cc === 64) engine.setSustain(value >= 0.5)
+            },
+            pitchBend: position => engine.setPitchBend(position),
+            allNotesOff: () => engine.allNotesOff(),
+        })
         return () => {
+            noteBus.unregister('shark')
             engine.dispose()
             engineRef.current = null
         }
@@ -60,29 +73,4 @@ export function useSynthEngine(): number {
     useEffect(() => { engineRef.current?.applyFx(fx) }, [fx])
     useEffect(() => { engineRef.current?.applyRoutes(routes) }, [routes, lfos, fx])
 
-    const handleNoteOn = useCallback((midi: number, velocity: number) => {
-        engineRef.current?.noteOn(midi, velocity)
-    }, [])
-
-    const handleNoteOff = useCallback((midi: number) => {
-        engineRef.current?.noteOff(midi)
-    }, [])
-
-    const handleControlChange = useCallback((cc: number, value: number) => {
-        if (cc === 1) engineRef.current?.setModWheel(value)
-        // CC64: anything from half-press up counts as down, per the MIDI spec.
-        if (cc === 64) engineRef.current?.setSustain(value >= 0.5)
-    }, [])
-
-    const handlePitchBend = useCallback((position: number) => {
-        engineRef.current?.setPitchBend(position)
-    }, [])
-
-    useMidi({
-        onNoteOn: handleNoteOn,
-        onNoteOff: handleNoteOff,
-        onControlChange: handleControlChange,
-        onPitchBend: handlePitchBend,
-    })
-    return useKeyboard({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff })
 }

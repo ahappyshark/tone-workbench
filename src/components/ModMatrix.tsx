@@ -1,28 +1,16 @@
+import { useMemo } from 'react'
 import Knob from './controls/Knob'
-import {
-    addRoute,
-    removeRoute,
-    updateRoute,
-    useFx,
-    useLFOs,
-    useRoute,
-    useRouteIds,
-    useSection,
-    setParam,
-} from '../state/patchStore'
 import Selector from './controls/Selector'
 import TriggerTabs from './controls/TriggerTabs'
+import type { InstrumentStore } from '../state/instrumentStore'
 import {
     DIVISIONS,
     LFO_RATE,
     MOD_DEPTH,
-    MOD_DESTINATIONS,
     MOD_SOURCE_IDS,
     MOD_SOURCE_META,
-    isRouteLive,
-    modDestinations,
-    type FxSlot,
     type LFOState,
+    type ModDestinationMeta,
 } from '../audio/patchTypes'
 
 const select: React.CSSProperties = {
@@ -43,20 +31,43 @@ function sourceLabel(id: string, lfos: LFOState[]): string {
     return index === -1 ? 'missing LFO' : `LFO ${index + 1}`
 }
 
-function RouteRow({ id, lfos, fx }: { id: string, lfos: LFOState[], fx: FxSlot[] }) {
-    const route = useRoute(id)
+/**
+ * Destination groups, derived from the id rather than declared.
+ *
+ * Effect slots are named `fx:<slot>:<param>` and grain params `grain.*`, so
+ * the grouping falls out of the naming and neither instrument has to carry a
+ * table of headings the other doesn't use.
+ */
+function groupOf(id: string): string {
+    if (id.startsWith('fx:')) return 'Effects'
+    if (id.startsWith('grain.')) return 'Grain'
+    return 'Voice'
+}
+
+function RouteRow({ store, id, lfos, destinations }: {
+    store: InstrumentStore
+    id: string
+    lfos: LFOState[]
+    destinations: Record<string, ModDestinationMeta>
+}) {
+    const route = store.useRoute(id)
+    const warning = store.useRouteWarning(route ?? { id, source: '', destination: '', depth: 0 })
     if (!route) return null
 
-    const destinations = modDestinations(fx)
     const meta = destinations[route.destination]
-    // The one way to build a route that can't do anything: a per-voice source
-    // aimed at an effect param, of which there is exactly one.
-    const live = isRouteLive(route, fx, lfos)
     // What this depth actually does, in the destination's own units.
     const amount = route.depth * (meta?.scale ?? 1)
     const readout = meta?.unit
-        ? `${amount >= 0 ? '+' : ''}${amount.toFixed(0)} ${meta.unit}`
+        ? `${amount >= 0 ? '+' : ''}${amount.toFixed(Math.abs(amount) < 10 ? 2 : 0)} ${meta.unit}`
         : `${amount >= 0 ? '+' : ''}${amount.toFixed(2)}`
+
+    const groups = new Map<string, [string, ModDestinationMeta][]>()
+    for (const entry of Object.entries(destinations)) {
+        const group = groupOf(entry[0])
+        const list = groups.get(group) ?? []
+        list.push(entry)
+        groups.set(group, list)
+    }
 
     return (
         <div style={{
@@ -69,7 +80,7 @@ function RouteRow({ id, lfos, fx }: { id: string, lfos: LFOState[], fx: FxSlot[]
         }}>
             <select
                 value={route.source}
-                onChange={e => updateRoute(id, { source: e.target.value })}
+                onChange={e => store.updateRoute(id, { source: e.target.value })}
                 style={{ ...select, minWidth: 130 }}
             >
                 {MOD_SOURCE_IDS.map(s => (
@@ -84,21 +95,14 @@ function RouteRow({ id, lfos, fx }: { id: string, lfos: LFOState[], fx: FxSlot[]
 
             <select
                 value={route.destination}
-                onChange={e => updateRoute(id, { destination: e.target.value })}
+                onChange={e => store.updateRoute(id, { destination: e.target.value })}
                 style={{ ...select, minWidth: 150 }}
             >
-                <optgroup label="Voice">
-                    {Object.keys(MOD_DESTINATIONS).map(key => (
-                        <option key={key} value={key}>{MOD_DESTINATIONS[key].label}</option>
-                    ))}
-                </optgroup>
-                {fx.length > 0 && (
-                    <optgroup label="Effects">
-                        {Object.entries(destinations)
-                            .filter(([, d]) => d.global)
-                            .map(([key, d]) => <option key={key} value={key}>{d.label}</option>)}
+                {[...groups].map(([group, entries]) => (
+                    <optgroup key={group} label={group}>
+                        {entries.map(([key, d]) => <option key={key} value={key}>{d.label}</option>)}
                     </optgroup>
-                )}
+                ))}
             </select>
 
             <Knob
@@ -107,7 +111,7 @@ function RouteRow({ id, lfos, fx }: { id: string, lfos: LFOState[], fx: FxSlot[]
                 max={MOD_DEPTH.max}
                 value={route.depth}
                 defaultValue={0}
-                onChange={v => updateRoute(id, { depth: v })}
+                onChange={v => store.updateRoute(id, { depth: v })}
                 size={44}
                 color={route.depth < 0 ? '#ff8800' : '#00ff88'}
             />
@@ -120,42 +124,54 @@ function RouteRow({ id, lfos, fx }: { id: string, lfos: LFOState[], fx: FxSlot[]
                 {sourceLabel(route.source, lfos)}
             </span>
 
-            {!live && (
-                <span style={{ fontSize: 9, color: '#ff8800' }}>
-                    inactive — an effect param is global, so it needs a source
-                    there is only one of
-                </span>
-            )}
+            {warning && <span style={{ fontSize: 9, color: '#ff8800' }}>{warning}</span>}
 
-            <button onClick={() => removeRoute(id)} style={{ fontSize: 10, color: '#ff4444' }}>✕</button>
+            <button onClick={() => store.removeRoute(id)} style={{ fontSize: 10, color: '#ff4444' }}>✕</button>
         </div>
     )
 }
 
-function ModMatrix() {
-    const routeIds = useRouteIds()
-    const lfos = useLFOs()
-    const fx = useFx()
-    const random = useSection('random')
+function ModMatrix({ store }: { store: InstrumentStore }) {
+    const routeIds = store.useRouteIds()
+    const lfos = store.useLFOs()
+    const random = store.useRandom()
+    const destinations = store.useDestinations()
+
+    // Whether this instrument has any destination the scheduler reads rather
+    // than the audio graph — worth saying out loud, because it changes what a
+    // fast LFO into that destination actually does.
+    const hasGrainRate = useMemo(
+        () => Object.keys(destinations).some(id => id.startsWith('grain.')),
+        [destinations],
+    )
 
     return (
         <div style={{ marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
                 <h3 style={{ margin: 0 }}>Mod Matrix</h3>
-                <button onClick={() => addRoute()}>+ Add Route</button>
+                <button onClick={() => store.addRoute()}>+ Add Route</button>
                 <span style={{ fontSize: 9, opacity: 0.35 }}>
                     depth is signed — negative inverts the source
                 </span>
             </div>
 
             <div style={{ border: '1px solid #444', borderRadius: 8, padding: '4px 12px 12px' }}>
-                {routeIds.map(id => <RouteRow key={id} id={id} lfos={lfos} fx={fx} />)}
+                {routeIds.map(id => (
+                    <RouteRow key={id} store={store} id={id} lfos={lfos} destinations={destinations} />
+                ))}
                 {routeIds.length === 0 && (
                     <span style={{ fontSize: 11, opacity: 0.4 }}>
                         No routes — add one to connect a source to a destination
                     </span>
                 )}
             </div>
+
+            {hasGrainRate && (
+                <span style={{ fontSize: 9, opacity: 0.4, display: 'block', marginTop: 6 }}>
+                    grain destinations are sampled once per grain, not summed at audio rate —
+                    an LFO faster than the grain rate will alias rather than wobble
+                </span>
+            )}
 
             {/* Random is a source with a rate of its own and no module to live in. */}
             <div style={{
@@ -165,7 +181,7 @@ function ModMatrix() {
                 <span style={{ fontSize: 11, opacity: 0.5, letterSpacing: 1 }}>RANDOM S&amp;H</span>
                 <TriggerTabs
                     value={random.trigger}
-                    onChange={t => setParam('random', 'trigger', t)}
+                    onChange={t => store.setRandom('trigger', t)}
                     titles={{
                         free: 'A new value on its own clock',
                         key: 'A new value on each note-on, held for the note',
@@ -174,11 +190,11 @@ function ModMatrix() {
                 />
                 {random.trigger === 'sync' && (
                     <Selector options={DIVISIONS} value={random.division}
-                        onChange={d => setParam('random', 'division', d)} color="#00aaff" />
+                        onChange={d => store.setRandom('division', d)} color="#00aaff" />
                 )}
                 {random.trigger === 'free' && (
                     <Knob label="Rate" min={LFO_RATE.min} max={LFO_RATE.max} value={random.rate}
-                        defaultValue={4} onChange={v => setParam('random', 'rate', v)} size={44} color="#ffff00" />
+                        defaultValue={4} onChange={v => store.setRandom('rate', v)} size={44} color="#ffff00" />
                 )}
                 {random.trigger === 'key' && (
                     <span style={{ fontSize: 9, opacity: 0.4 }}>one value per note, held</span>

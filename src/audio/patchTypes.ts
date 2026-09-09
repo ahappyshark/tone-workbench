@@ -355,7 +355,16 @@ export const MOD_DESTINATIONS: Record<string, ModDestinationMeta> = {
  * than letting such a route sit there doing nothing.
  */
 export function modDestinations(fx: FxSlot[]): Record<string, ModDestinationMeta> {
-    const all: Record<string, ModDestinationMeta> = { ...MOD_DESTINATIONS }
+    return { ...MOD_DESTINATIONS, ...fxDestinations(fx) }
+}
+
+/**
+ * Just the effect-slot half, with no instrument-specific destinations mixed
+ * in. Split out because the grain instrument has an entirely different set of
+ * its own but the identical effects chain — see `grainDestinations`.
+ */
+export function fxDestinations(fx: FxSlot[]): Record<string, ModDestinationMeta> {
+    const all: Record<string, ModDestinationMeta> = {}
     fx.forEach((slot, i) => {
         for (const param of FX_MOD_PARAMS[slot.type]) {
             const scale = FX_MOD_SCALE[param] ?? { scale: 1, unit: '' }
@@ -620,7 +629,7 @@ function coerceTrigger(r: Record<string, unknown>, base: TriggerMode): TriggerMo
     return base
 }
 
-function coerceFxParams(raw: unknown): FxParams {
+export function coerceFxParams(raw: unknown): FxParams {
     const r = isRecord(raw) ? raw : {}
     const base = defaultFxParams()
     const keys = Object.keys(base) as (keyof FxParams)[]

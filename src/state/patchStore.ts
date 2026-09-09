@@ -4,12 +4,16 @@ import {
     createFx,
     createLFO,
     createRoute,
+    isRouteLive,
+    modDestinations,
     type FxParams,
     type FxSlot,
     type LFOState,
+    type ModDestinationMeta,
     type ModRoute,
     type PatchState,
 } from '../audio/patchTypes'
+import type { InstrumentStore } from './instrumentStore'
 
 /**
  * The single source of truth for the current patch.
@@ -242,3 +246,54 @@ export function usePatch(): PatchState {
 }
 
 export { subscribe as subscribeToPatch }
+
+/* ------------------------------------------------------------------ */
+/* The shared-rack adapter                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * This store, seen through the interface the FX rack, LFO rack and mod matrix
+ * take. They render either instrument, so they can't import a store directly.
+ */
+export const sharkStore: InstrumentStore = {
+    label: 'Shark Synth',
+
+    useFxIds,
+    useFxSlot,
+    addFx,
+    removeFx,
+    updateFx,
+    setFxParam,
+    moveFx,
+
+    useLFOIds,
+    useLFOState,
+    useLFOs,
+    addLFO,
+    removeLFO,
+    updateLFO,
+    perVoiceLFOs: true,
+
+    useRouteIds,
+    useRoute,
+    useRoutes: useSyncedRoutes,
+    addRoute,
+    removeRoute,
+    updateRoute,
+
+    useRandom: () => useSection('random'),
+    setRandom: (key, value) => setParam('random', key, value),
+
+    useDestinations(): Record<string, ModDestinationMeta> {
+        const fx = useFx()
+        return useMemo(() => modDestinations(fx), [fx])
+    },
+
+    useRouteWarning(route: ModRoute): string | null {
+        const fx = useFx()
+        const lfos = useLFOs()
+        return isRouteLive(route, fx, lfos)
+            ? null
+            : 'inactive — an effect param is global, so it needs a source there is only one of'
+    },
+}

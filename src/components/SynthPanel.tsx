@@ -3,7 +3,6 @@ import Knob from './controls/Knob'
 import Selector from './controls/Selector'
 import TriggerTabs from './controls/TriggerTabs'
 import { setParam, useSection } from '../state/patchStore'
-import { useSynthEngine } from '../hooks/useSynthEngine'
 import { POLYPHONY } from '../audio/synthEngine'
 import {
     DEFAULT_PATCH,
@@ -160,8 +159,7 @@ function ModEnvTrigger() {
     )
 }
 
-function SynthPanel() {
-    const keyboardOctave = useSynthEngine()
+function SynthPanel({ keyboardOctave }: { keyboardOctave: number }) {
 
     const sub = useSection('sub')
     const noise = useSection('noise')
