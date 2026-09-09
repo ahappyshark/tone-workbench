@@ -32,27 +32,6 @@ that gate mounts only after `Tone.start()`.
 | `src/components/` | panels and racks |
 | `src/sandbox/` | dead experiments, excluded from tsconfig and eslint. Stale by design |
 
----
-
-## Git state
-
-Branch `claude/tonejs-synth-presets-o310rs`, last commit `49a98ad grain synth
-first pass`.
-
-**There is substantial uncommitted work in the tree.** It is all verified and
-both `npm run build` and `npm run lint` are green, but nothing since that
-commit has been committed:
-
-- Modified: `GRAIN-DESIGN.md`, `SYNTH-DESIGN.md`, `src/audio/fxRack.ts`,
-  `src/audio/grainSource.ts`, `src/audio/grainTypes.ts`,
-  `src/audio/grainVoice.ts`, `src/audio/patchTypes.ts`,
-  `src/components/FXRack.tsx`, `src/components/grain/GrainPanel.tsx`,
-  `src/components/grain/WaveformView.tsx`, `src/hooks/useGrainEngine.ts`,
-  `src/state/patchStore.ts`
-- New: `src/audio/ducker.ts`, `src/audio/ladder.ts`, `src/audio/resonator.ts`,
-  `src/audio/tapeEcho.ts`
-
-Ask the user before committing.
 
 ---
 
