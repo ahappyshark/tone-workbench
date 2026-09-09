@@ -1,6 +1,8 @@
 import * as Tone from 'tone'
+import { Dimension } from './dimension'
 import { Ducker } from './ducker'
 import { Ladder } from './ladder'
+import { MultibandSmear } from './multiband'
 import { Resonator } from './resonator'
 import { TapeEcho } from './tapeEcho'
 import {
@@ -27,25 +29,27 @@ import {
 /**
  * An effect is not necessarily one node.
  *
- * Four of the five are a single Tone effect, where the thing upstream
- * connects to and the thing that connects onward are the same object. Shimmer
- * is a small patched network with a feedback loop inside it, so the chain has
- * to know its entry and exit separately. Keeping `entry`/`exit` for every
- * slot rather than special-casing is what makes the next composite effect a
- * new file instead of a new exception.
+ * Four of them are a single Tone effect, where the thing upstream connects to
+ * and the thing that connects onward are the same object. The rest are small
+ * patched networks — a feedback loop, a band split, a change of coordinates —
+ * so the chain has to know their entry and exit separately. Keeping
+ * `entry`/`exit` for every slot rather than special-casing is what makes each
+ * new composite effect a new file instead of a new exception.
  */
 type FxNode =
     | Tone.Distortion | Tone.Chorus | Tone.FeedbackDelay | Tone.Reverb
-    | Ladder | Resonator | Ducker | TapeEcho
+    | Ladder | Resonator | Ducker | TapeEcho | MultibandSmear | Dimension
 
 /** The composites, which have an entry and an exit rather than being one node. */
-type Composite = Ladder | Resonator | Ducker | TapeEcho
+type Composite = Ladder | Resonator | Ducker | TapeEcho | MultibandSmear | Dimension
 
 function isComposite(node: FxNode): node is Composite {
     return node instanceof Ladder
         || node instanceof Resonator
         || node instanceof Ducker
         || node instanceof TapeEcho
+        || node instanceof MultibandSmear
+        || node instanceof Dimension
 }
 
 /** Params that take modulation, and so are driven by a base signal. */
@@ -93,6 +97,10 @@ function createNode(type: FxType): FxNode {
             return new Ducker()
         case 'tape':
             return new TapeEcho()
+        case 'smear':
+            return new MultibandSmear()
+        case 'dimension':
+            return new Dimension()
     }
 }
 
@@ -127,6 +135,27 @@ function modParam(slot: Slot, param: ModParam): AnyParam | null {
     }
     if (node instanceof Ducker) {
         if (param === 'wet') return node.wet
+        if (param === 'depth') return node.depthParam
+        return null
+    }
+    if (node instanceof MultibandSmear) {
+        if (param === 'wet') return node.wet
+        if (param === 'lowCross') return node.lowCross
+        if (param === 'highCross') return node.highCross
+        if (param === 'lowTime') return node.lowTime
+        if (param === 'midTime') return node.midTime
+        if (param === 'highTime') return node.highTime
+        if (param === 'lowFeedback') return node.lowFeedback
+        if (param === 'midFeedback') return node.midFeedback
+        if (param === 'highFeedback') return node.highFeedback
+        return null
+    }
+    if (node instanceof Dimension) {
+        if (param === 'wet') return node.wet
+        if (param === 'width') return node.widthParam
+        if (param === 'mono') return node.monoParam
+        if (param === 'offset') return node.offset
+        if (param === 'rate') return node.rate
         if (param === 'depth') return node.depthParam
         return null
     }
@@ -295,6 +324,28 @@ export class FxRack {
                     slot.applied.depth = p.depth
                     node.setWow(p.rate, p.depth)
                 }
+                break
+            }
+            // Both of the newest composites are all param and no setter, so
+            // there is nothing here to guard against a rebuild — every knob
+            // writes a base signal and the modulation sums on top of it.
+            case 'smear': {
+                this.setBase(slot, 'lowCross', p.lowCross)
+                this.setBase(slot, 'highCross', p.highCross)
+                this.setBase(slot, 'lowTime', p.lowTime)
+                this.setBase(slot, 'midTime', p.midTime)
+                this.setBase(slot, 'highTime', p.highTime)
+                this.setBase(slot, 'lowFeedback', p.lowFeedback)
+                this.setBase(slot, 'midFeedback', p.midFeedback)
+                this.setBase(slot, 'highFeedback', p.highFeedback)
+                break
+            }
+            case 'dimension': {
+                this.setBase(slot, 'width', p.width)
+                this.setBase(slot, 'mono', p.mono)
+                this.setBase(slot, 'offset', p.offset)
+                this.setBase(slot, 'rate', p.rate)
+                this.setBase(slot, 'depth', p.depth)
                 break
             }
             case 'duck': {

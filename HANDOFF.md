@@ -1,7 +1,9 @@
 # Handoff — tone-workbench
 
 Written at the end of the session that built the Grain Lab and the composite
-effects. Everything here is current as of the working tree described below.
+effects, and updated by the one that added the last two of them — the
+multiband smear and the mid/side dimension. Everything here is current as of
+the working tree described below.
 
 **Read this first, then `SYNTH-DESIGN.md` and `GRAIN-DESIGN.md` for the
 reasoning behind the decisions summarised here.** `OPEN-QUESTIONS.md` is the
@@ -84,7 +86,7 @@ A separate instrument, not a mode of the synth. Six grain clouds, its own
 - **`InstrumentStore` adapter** (`src/state/instrumentStore.ts`). The FX rack,
   LFO rack and mod matrix take one of these instead of importing a store, so
   the same components render either instrument.
-- **Nine effect types**, all available to both instruments:
+- **Eleven effect types**, all available to both instruments:
 
 | type | node |
 | --- | --- |
@@ -94,6 +96,8 @@ A separate instrument, not a mode of the synth. Six grain clouds, its own
 | resonator | four tuned comb filters; one voicing is the root-omitted stacked third |
 | duck | reverb with an envelope follower pulling the wet down while you play |
 | tape | delay with saturation and lowpass in the feedback path, plus a wow LFO |
+| smear | `MultibandSmear` — `MultibandSplit` into three delays with independent times and feedbacks |
+| dimension | `Dimension` — `MidSideSplit`, a modulated delay and a width gain on the sides only, merge |
 
 ---
 
@@ -146,19 +150,13 @@ delta), the single certainty slider from deterministic to uniform-random, a
 `Tone.Loop` trigger on a settable subdivision, and a mode that responds to
 live playing instead of generating autonomously.
 
-### 5. Two more composite effects
-
-Multiband smear (`MultibandSplit` into three bands, each with its own delay
-time and feedback) and mid/side dimension (`MidSideSplit`, process only the
-sides, merge). Both are straightforward with what already exists.
-
-### 6. UI pass
+### 5. UI pass
 
 Raised and deferred. Everything is inline styles and functional-only controls.
 The mod matrix is deliberately a flat list until a patch routinely runs past
 about eight routes (OPEN-QUESTIONS #16).
 
-### 7. Smaller items
+### 6. Smaller items
 
 - Resonator `tune` is a setter, so the bank's root cannot be modulated.
   Making it one means driving four delay-time params from one source.
@@ -241,6 +239,24 @@ place.
   it is written or a knob drag fires one render per frame.
 - **`AudioBufferSourceNode` refuses a negative playback rate.** Reverse grains
   read a genuinely reversed copy of the buffer at the mirrored offset.
+- **A crossover's Q is a resonant peak at the crossover.** Tone's `Filter` and
+  `MultibandSplit` default to Q = 1, and the bands are summed back together
+  afterwards, so that peak survives as an audible bump exactly where the
+  bands meet. Both new composites pin Q at 0.707 for this; the mid/side one
+  measured +1.2 dB of bass *into* the sides before it did, which is the
+  opposite of what its mono control is for.
+- **A three-band split does not reconstruct flat.** Butterworth crossovers are
+  not complementary, so summing the bands back is about 2 dB down on
+  broadband material even with all three delays set equal. Not corrected: the
+  error is frequency-dependent, so a fixed makeup gain would only move it.
+- **Mid/side is silent on a mono source.** The side signal of two identical
+  channels is zero, so every control in `dimension` does nothing at all.
+  Something stereo has to come first — unison spread, a chorus, panned
+  grains. It is a property of the transform, not a bug to fix.
+- **A negative delay time clamps at zero rather than wrapping.** An LFO summed
+  into a delay time around an offset of zero gets half-wave rectified, which
+  is a buzz and not a wobble. `dimension`'s sway LFO is unipolar so it only
+  ever adds.
 
 ### Why the grain engine is not `Tone.GrainPlayer`
 
@@ -286,18 +302,22 @@ the overlap count or a density sweep becomes a volume sweep.
 
 **No known runtime failures.** Build and lint are green, and a smoke test of
 the current tree showed no console errors, both instruments sounding, the
-grain starter loaded, and all nine effect types available on both racks.
+grain starter loaded, and all eleven effect types available on both racks.
+The two newest were additionally rendered offline and measured: each band of
+the smear arrives at its own delay time and repeats at it, and the dimension
+scales the sides while leaving a mono source bit-identical.
 
 Things to be aware of:
 
 1. **Grain patch state is not persisted.** See unresolved item 1. Treat this
    as a bug rather than a missing feature if a user loses work to it.
 2. **Schema versions have moved without migration logic.** `PATCH_VERSION` is
-   7 and `GRAIN_PATCH_VERSION` is 2. Coercion clamps and defaults anything
+   8 and `GRAIN_PATCH_VERSION` is 2. Coercion clamps and defaults anything
    unrecognised, which has been enough so far, but OPEN-QUESTIONS #4 says to
    revisit and that point has arguably arrived.
 3. **Vite HMR does not reliably swap composite effect classes.** Editing
-   `ladder.ts`, `ducker.ts`, `resonator.ts` or `tapeEcho.ts` leaves already
+   `ladder.ts`, `ducker.ts`, `resonator.ts`, `tapeEcho.ts`, `multiband.ts` or
+   `dimension.ts` leaves already
    constructed instances in the graph. This produced a false negative during
    testing that cost real time. **Do a full page reload after touching an
    audio class**, not just an HMR update.
@@ -332,6 +352,29 @@ This catches things listening cannot describe and screenshots cannot show —
 that scatter was mathematically working but inaudible, that the shimmer tail
 climbed in centroid, that the resonator peaked past full scale, that the duck
 gain moved from 1.0 to 0.38 and back. **Remove the probe when done.**
+
+**Better still, render it offline.** `Tone.Offline(cb, seconds, channels)`
+swaps the global context for the duration of the callback, so anything built
+inside it — a composite effect, or a whole `FxRack` with a patch applied —
+renders to a buffer you can measure sample by sample. That is how the two
+newest effects were checked: a ramped sine burst through the smear, with the
+arrival times of the peaks read off the buffer and compared against each
+band's delay time, and a pure-side source through the dimension, with the
+width knob shown to scale the sides and leave a pure-mid source untouched to
+four decimal places. It runs faster than real time, needs no clicking, and
+answers questions listening cannot.
+
+Two things it caught that a live smoke test would not have:
+
+- **Test through `FxRack`, not just the effect class.** Writing `.value` on a
+  param the rack has connected a base signal to does nothing, so an effect
+  that measures perfectly on its own can still be a row of dead knobs in the
+  app. `rack.destinationParam()` is public: walk `FX_MOD_PARAMS` for every
+  type, assert each name resolves and that no two resolve to the *same*
+  param, and both wiring mistakes fall out. All eleven types pass today.
+- **Gate a test tone with ramps.** A `setValueAtTime` step is a click, a click
+  is broadband, and broadband lands in all three bands of the smear at once —
+  which made the arrival times meaningless until the burst was ramped.
 
 Knobs are pointer-drag controls; to set one from the console, stub
 `Element.prototype.setPointerCapture` to a no-op and dispatch
