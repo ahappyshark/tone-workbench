@@ -374,10 +374,13 @@ export class GrainVoice {
             this.resolve('grain.size', s.size, globals, time),
             GRAIN_RANGES.size.min, GRAIN_RANGES.size.max,
         )
-        const spray = clamp(
+        // Scatter is a fraction of the whole buffer, not a number of
+        // seconds: "grab from anywhere in the file" has to mean the same
+        // thing whether the file is two seconds long or two minutes.
+        const scatter = clamp(
             this.resolve('grain.spray', s.spray, globals, time),
             0, GRAIN_RANGES.spray.max,
-        )
+        ) * sample.duration
         const shape = clamp(
             this.resolve('grain.shape', s.shape, globals, time), 0, 1,
         )
@@ -408,7 +411,7 @@ export class GrainVoice {
         const reversed = Math.random() < reverseOdds
 
         const head = position * sample.duration + this.drift
-            + (Math.random() * 2 - 1) * spray
+            + (Math.random() * 2 - 1) * scatter
         const span = Math.max(0.001, sample.duration - consumed)
         // Wrap rather than clamp: a head past the end should come round to
         // the start, which is what makes a slow scan loop seamlessly.

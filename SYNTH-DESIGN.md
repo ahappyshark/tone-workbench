@@ -299,6 +299,62 @@ after the voices are summed, so an effect param is one value and a per-voice
 source is sixteen. `isRouteLive` is the shared rule and the matrix labels such
 a row inactive rather than letting it look wired. See OPEN-QUESTIONS #26.
 
+**An effect is not necessarily one node.** Four of the five are a single Tone
+effect, where the thing the chain connects into and the thing it carries on
+from are the same object. Shimmer is a small patched network with a feedback
+loop inside it, so every slot now tracks its `entry` and `exit` separately.
+That is what makes the next composite effect a new file rather than a new
+exception, and both instruments get it for free because they share the class.
+
+**The composites, and what each one needed.**
+
+| effect | what it is | the bit that wasn't obvious |
+| --- | --- | --- |
+| Shimmer | delay whose feedback runs through a pitch shifter, into a reverb | the reverb has to be *outside* the loop |
+| Shift | the same network with a frequency shifter | shifts by hertz, so it goes inharmonic — and unlike pitch it's a signal, so it modulates |
+| Resonator | four tuned comb filters | resonance needs a curve, and the output needs compensating for it |
+| Ducked Verb | envelope follower pulling the wet down | the follower's output is tiny and the sum has to be clamped |
+| Tape Echo | delay with saturation and lowpass in the feedback | the wow LFO sums into the delay time rather than setting it |
+
+Two of those are worth spelling out, because both were wrong first time and
+both were only caught by measuring rather than listening.
+
+**A comb filter's ring time and its gain are the same knob.** Ring time goes
+as 1/(1−r), so everything interesting is crammed against 1: at a feedback of
+0.85 the bank rang for a third of a second and just sounded like a filter. But
+the resonance that makes it sustain also makes it roughly 1/(1−r) times louder
+at its resonant frequency, so the first fix rang for five seconds and peaked
+well past full scale. The bank now maps the knob through a curve *and* scales
+its output by the square root of (1−r), which holds the level roughly still
+while the ring time changes.
+
+**An envelope follower's output is much smaller than you expect.** It is the
+smoothed absolute value of the signal, and notes arriving off the voice bus
+peak at around a tenth of full scale. Fed straight in, full ducking depth
+moved the wet by about five percent. It needs a makeup gain of twenty or so to
+mean anything, and once it is that hot the control signal can go negative,
+where a "gain" does not mute the reverb but inverts it — hence the waveshaper
+flooring the sum at zero.
+
+**Shimmer, and what it taught us.** It is an octave ladder — a delay whose
+feedback path runs through a pitch shifter — with a reverb after it. Three
+constraints shaped that:
+
+- `Tone.Reverb` is a convolver. Its tail is an impulse response that has
+  already been computed, with no feedback path to insert anything into. So
+  regeneration has to be a loop built around it, not a knob on it.
+- The first version put the convolver *inside* the loop. It works, but the
+  tail dies in about two seconds however high the feedback goes: convolution
+  spreads one impulse across the whole decay, so the gain going round the loop
+  is a small fraction of unity. Outside the loop, the regeneration knob means
+  what it says.
+- Web Audio silences a feedback cycle containing no `DelayNode`, which Tone
+  states outright in `FeedbackEffect`. The spacing delay is that node, and it
+  is also the most musical control: it sets how long each octave waits.
+
+Pitch is not a modulation destination, for the same reason reverb decay isn't
+— its setter rebuilds the shifter's delay ramps.
+
 **Rewiring is the one thing here that clicks**, so it only happens when the
 shape of the chain changes — add, remove, bypass, reorder, retype. The chain
 signature is `id:type` rather than `id` precisely because retyping replaces the

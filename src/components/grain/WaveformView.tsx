@@ -5,7 +5,7 @@ interface WaveformViewProps {
     buffer: GrainBuffer | null
     /** where the knob points, 0..1 */
     position: number
-    /** seconds of random offset either side of the head */
+    /** random offset either side of the head, as a fraction of the buffer */
     spray: number
     /** live scan-head positions, polled each frame */
     readHeads: () => number[]
@@ -50,7 +50,7 @@ function WaveformView({ buffer, position, spray, readHeads, onScrub }: WaveformV
 
                 // Spray band first, so the waveform draws over it.
                 if (spr > 0 && buf.duration > 0) {
-                    const half = (spr / buf.duration) * WIDTH
+                    const half = spr * WIDTH
                     ctx.fillStyle = 'rgba(170, 68, 255, 0.16)'
                     ctx.fillRect(pos * WIDTH - half, 0, half * 2, HEIGHT)
                 }

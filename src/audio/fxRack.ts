@@ -1,4 +1,8 @@
 import * as Tone from 'tone'
+import { Ducker } from './ducker'
+import { Ladder } from './ladder'
+import { Resonator } from './resonator'
+import { TapeEcho } from './tapeEcho'
 import {
     FX_MOD_PARAMS,
     type FxParams,
@@ -20,7 +24,29 @@ import {
  * or retyping a slot. Turning a knob never rewires anything.
  */
 
-type FxNode = Tone.Distortion | Tone.Chorus | Tone.FeedbackDelay | Tone.Reverb
+/**
+ * An effect is not necessarily one node.
+ *
+ * Four of the five are a single Tone effect, where the thing upstream
+ * connects to and the thing that connects onward are the same object. Shimmer
+ * is a small patched network with a feedback loop inside it, so the chain has
+ * to know its entry and exit separately. Keeping `entry`/`exit` for every
+ * slot rather than special-casing is what makes the next composite effect a
+ * new file instead of a new exception.
+ */
+type FxNode =
+    | Tone.Distortion | Tone.Chorus | Tone.FeedbackDelay | Tone.Reverb
+    | Ladder | Resonator | Ducker | TapeEcho
+
+/** The composites, which have an entry and an exit rather than being one node. */
+type Composite = Ladder | Resonator | Ducker | TapeEcho
+
+function isComposite(node: FxNode): node is Composite {
+    return node instanceof Ladder
+        || node instanceof Resonator
+        || node instanceof Ducker
+        || node instanceof TapeEcho
+}
 
 /** Params that take modulation, and so are driven by a base signal. */
 type ModParam = keyof FxParams | 'wet'
@@ -57,7 +83,27 @@ function createNode(type: FxType): FxNode {
             return new Tone.FeedbackDelay()
         case 'reverb':
             return new Tone.Reverb()
+        case 'shimmer':
+            return new Ladder('pitch')
+        case 'shift':
+            return new Ladder('shift')
+        case 'resonator':
+            return new Resonator()
+        case 'duck':
+            return new Ducker()
+        case 'tape':
+            return new TapeEcho()
     }
+}
+
+/** Where the chain connects into this effect. */
+function entryOf(node: FxNode): Tone.ToneAudioNode {
+    return isComposite(node) ? node.input : node
+}
+
+/** Where the chain carries on from. */
+function exitOf(node: FxNode): Tone.ToneAudioNode {
+    return isComposite(node) ? node.output : node
 }
 
 /** The audio-rate param behind one modulatable name, or null. */
@@ -66,6 +112,31 @@ type AnyParam = Tone.Param<any> | Tone.Signal<any>
 
 function modParam(slot: Slot, param: ModParam): AnyParam | null {
     const node = slot.node
+    if (node instanceof Ladder) {
+        if (param === 'wet') return node.wet
+        if (param === 'time') return node.time
+        if (param === 'feedback') return node.feedback
+        if (param === 'damp') return node.damping
+        if (param === 'shift') return node.shift
+        return null
+    }
+    if (node instanceof Resonator) {
+        if (param === 'wet') return node.wet
+        if (param === 'feedback') return node.resonance
+        return null
+    }
+    if (node instanceof Ducker) {
+        if (param === 'wet') return node.wet
+        if (param === 'depth') return node.depthParam
+        return null
+    }
+    if (node instanceof TapeEcho) {
+        if (param === 'wet') return node.wet
+        if (param === 'time') return node.time
+        if (param === 'feedback') return node.feedback
+        if (param === 'damp') return node.damping
+        return null
+    }
     if (param === 'wet') return node.wet
     if (node instanceof Tone.Chorus) {
         if (param === 'rate') return node.frequency
@@ -174,6 +245,77 @@ export class FxRack {
                 this.setBase(slot, 'feedback', p.feedback)
                 break
             }
+            case 'shift':
+            case 'shimmer': {
+                const node = slot.node as Ladder
+                this.setBase(slot, 'time', p.time)
+                this.setBase(slot, 'feedback', p.feedback)
+                this.setBase(slot, 'damp', p.damp)
+                if (node.kind === 'shift') this.setBase(slot, 'shift', p.shift)
+                else if (slot.applied.pitch !== p.pitch) {
+                    node.pitch = p.pitch
+                    slot.applied.pitch = p.pitch
+                }
+                // Same offline impulse-response render as a plain reverb, and
+                // debounced for the same reason.
+                if (slot.applied.decay !== p.decay || slot.applied.preDelay !== p.preDelay) {
+                    slot.applied.decay = p.decay
+                    slot.applied.preDelay = p.preDelay
+                    if (slot.regenerate) clearTimeout(slot.regenerate)
+                    slot.regenerate = setTimeout(() => {
+                        slot.regenerate = null
+                        if (slot.disposed) return
+                        node.setDecay(p.decay, p.preDelay).catch(() => { /* superseded */ })
+                    }, 120)
+                }
+                break
+            }
+            case 'resonator': {
+                const node = slot.node as Resonator
+                this.setBase(slot, 'feedback', p.feedback)
+                if (slot.applied.damp !== p.damp) {
+                    node.setDamping(p.damp)
+                    slot.applied.damp = p.damp
+                }
+                if (slot.applied.tune !== p.tune || slot.applied.voicing !== p.voicing) {
+                    slot.applied.tune = p.tune
+                    slot.applied.voicing = p.voicing
+                    node.setTuning(p.tune, Math.round(p.voicing))
+                }
+                break
+            }
+            case 'tape': {
+                const node = slot.node as TapeEcho
+                this.setBase(slot, 'time', p.time)
+                this.setBase(slot, 'feedback', p.feedback)
+                this.setBase(slot, 'damp', p.damp)
+                node.setDrive(p.drive)
+                if (slot.applied.rate !== p.rate || slot.applied.depth !== p.depth) {
+                    slot.applied.rate = p.rate
+                    slot.applied.depth = p.depth
+                    node.setWow(p.rate, p.depth)
+                }
+                break
+            }
+            case 'duck': {
+                const node = slot.node as Ducker
+                this.setBase(slot, 'depth', p.depth)
+                if (slot.applied.time !== p.time) {
+                    node.setRecovery(p.time)
+                    slot.applied.time = p.time
+                }
+                if (slot.applied.decay !== p.decay || slot.applied.preDelay !== p.preDelay) {
+                    slot.applied.decay = p.decay
+                    slot.applied.preDelay = p.preDelay
+                    if (slot.regenerate) clearTimeout(slot.regenerate)
+                    slot.regenerate = setTimeout(() => {
+                        slot.regenerate = null
+                        if (slot.disposed) return
+                        node.setDecay(p.decay, p.preDelay).catch(() => { /* superseded */ })
+                    }, 120)
+                }
+                break
+            }
             case 'reverb': {
                 // decay and preDelay re-render an impulse response offline,
                 // which is far too expensive to do on every frame of a knob
@@ -205,14 +347,14 @@ export class FxRack {
      */
     private rewire() {
         this.input.disconnect()
-        for (const slot of this.slots.values()) slot.node.disconnect()
+        for (const slot of this.slots.values()) exitOf(slot.node).disconnect()
 
         let previous: Tone.ToneAudioNode = this.input
-        for (const entry of this.chain) {
-            const slot = this.slots.get(entry.slice(0, entry.lastIndexOf(':')))
+        for (const item of this.chain) {
+            const slot = this.slots.get(item.slice(0, item.lastIndexOf(':')))
             if (!slot) continue
-            previous.connect(slot.node)
-            previous = slot.node
+            previous.connect(entryOf(slot.node))
+            previous = exitOf(slot.node)
         }
         previous.connect(this.output)
     }

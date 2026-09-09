@@ -1,6 +1,7 @@
 import Knob from './controls/Knob'
 import Selector from './controls/Selector'
 import type { InstrumentStore } from '../state/instrumentStore'
+import { VOICING_LABELS } from '../audio/resonator'
 import {
     FX_LABELS,
     FX_MOD_PARAMS,
@@ -22,13 +23,34 @@ const PARAM_COLORS: Record<keyof FxParams, string> = {
     feedback: '#ff8800',
     decay: '#aa44ff',
     preDelay: '#ffff00',
+    pitch: '#00ff88',
+    damp: '#ff8800',
+    shift: '#00ff88',
+    tune: '#00aaff',
+    voicing: '#aa44ff',
 }
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+/** A MIDI number as a note name, so the resonator's root reads musically. */
+function noteName(midi: number): string {
+    const n = Math.round(midi)
+    return `${NOTE_NAMES[((n % 12) + 12) % 12]}${Math.floor(n / 12) - 1}`
+}
+
+/** Params that only make sense at whole numbers. */
+const INTEGER_FX_PARAMS = new Set<keyof FxParams>(['pitch', 'tune', 'voicing'])
 
 /** Two decimals is noise on a spread of 180 degrees. */
 const PARAM_PRECISION: Partial<Record<keyof FxParams, number>> = {
     spread: 0,
     time: 3,
     preDelay: 3,
+    pitch: 0,
+    damp: 0,
+    shift: 0,
+    tune: 0,
+    voicing: 0,
 }
 
 function FxSlotPanel({ store, id, index, count, modCount }: {
@@ -108,9 +130,17 @@ function FxSlotPanel({ store, id, index, count, modCount }: {
                         size={48}
                         color={PARAM_COLORS[param]}
                         precision={PARAM_PRECISION[param]}
+                        step={INTEGER_FX_PARAMS.has(param) ? 1 : undefined}
                     />
                 ))}
             </div>
+
+            {slot.type === 'resonator' && (
+                <span style={{ fontSize: 9, opacity: 0.55, fontFamily: 'monospace' }}>
+                    ringing {noteName(slot.params.tune)}{' '}
+                    {VOICING_LABELS[Math.round(slot.params.voicing)] ?? VOICING_LABELS[0]}
+                </span>
+            )}
 
             <span style={{ fontSize: 9, opacity: 0.4 }}>
                 {modCount > 0

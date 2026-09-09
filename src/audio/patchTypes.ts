@@ -5,7 +5,7 @@
  * patch may live in component state, or it won't survive a save/load.
  */
 
-export const PATCH_VERSION = 5
+export const PATCH_VERSION = 7
 
 export const WAVES = ['sine', 'triangle', 'sawtooth', 'square'] as const
 export type Wave = typeof WAVES[number]
@@ -185,7 +185,10 @@ export interface ModEnvState extends EnvState {
 /* Effects                                                             */
 /* ------------------------------------------------------------------ */
 
-export const FX_TYPES = ['drive', 'chorus', 'delay', 'reverb'] as const
+export const FX_TYPES = [
+    'drive', 'chorus', 'delay', 'reverb',
+    'shimmer', 'shift', 'resonator', 'duck', 'tape',
+] as const
 export type FxType = typeof FX_TYPES[number]
 
 export const FX_LABELS: Record<FxType, string> = {
@@ -193,6 +196,11 @@ export const FX_LABELS: Record<FxType, string> = {
     chorus: 'Chorus',
     delay: 'Delay',
     reverb: 'Reverb',
+    shimmer: 'Shimmer',
+    shift: 'Shift',
+    resonator: 'Resonator',
+    duck: 'Ducked Verb',
+    tape: 'Tape Echo',
 }
 
 /**
@@ -218,6 +226,16 @@ export interface FxParams {
     decay: number
     /** reverb: seconds before the tail starts */
     preDelay: number
+    /** shimmer: semitones each regeneration is transposed by */
+    pitch: number
+    /** shimmer: lowpass in the feedback loop, in Hz */
+    damp: number
+    /** shift: hertz moved per pass — not an interval, so it goes inharmonic */
+    shift: number
+    /** resonator: root note of the bank, in MIDI semitones */
+    tune: number
+    /** resonator: which voicing the bank is tuned to, an index into VOICINGS */
+    voicing: number
 }
 
 export interface FxSlot {
@@ -240,6 +258,13 @@ export const FX_RANGES = {
     feedback: { min: 0, max: 0.95 },
     decay: { min: 0.1, max: 20 },
     preDelay: { min: 0, max: 0.5 },
+    pitch: { min: -24, max: 24 },
+    damp: { min: 200, max: 12000 },
+    // Beyond a few hundred hertz a frequency shift stops being a colour and
+    // starts being a ring modulator, which is a different effect.
+    shift: { min: -500, max: 500 },
+    tune: { min: 24, max: 84 },
+    voicing: { min: 0, max: 3 },
 } as const
 
 /** Which knobs each effect actually has, in the order they should appear. */
@@ -248,6 +273,14 @@ export const FX_TYPE_PARAMS: Record<FxType, readonly (keyof FxParams)[]> = {
     chorus: ['rate', 'depth', 'spread', 'feedback'],
     delay: ['time', 'feedback'],
     reverb: ['decay', 'preDelay'],
+    // `time` here is the gap between one octave and the next, which is the
+    // control that decides whether this is a sheen or an ascending cloud.
+    shimmer: ['pitch', 'time', 'feedback', 'damp', 'decay'],
+    shift: ['shift', 'time', 'feedback', 'damp', 'decay'],
+    resonator: ['tune', 'voicing', 'feedback', 'damp'],
+    // `time` here is how long the wet takes to come back after you stop.
+    duck: ['depth', 'time', 'decay', 'preDelay'],
+    tape: ['time', 'feedback', 'drive', 'damp', 'rate', 'depth'],
 }
 
 export const FX_PARAM_LABELS: Record<keyof FxParams | 'wet', string> = {
@@ -260,6 +293,11 @@ export const FX_PARAM_LABELS: Record<keyof FxParams | 'wet', string> = {
     feedback: 'Feedback',
     decay: 'Decay',
     preDelay: 'Pre-Dly',
+    pitch: 'Pitch',
+    damp: 'Damp',
+    shift: 'Shift Hz',
+    tune: 'Root',
+    voicing: 'Voicing',
 }
 
 /**
@@ -275,6 +313,16 @@ export const FX_MOD_PARAMS: Record<FxType, readonly (keyof FxParams | 'wet')[]> 
     chorus: ['wet', 'rate', 'feedback'],
     delay: ['wet', 'time', 'feedback'],
     reverb: ['wet'],
+    // `pitch` is missing on purpose: its setter rebuilds the pitch shifter's
+    // delay ramps, so it can no more follow an LFO than reverb decay can.
+    shimmer: ['wet', 'time', 'feedback', 'damp'],
+    // Unlike shimmer's pitch, a frequency shift is a real signal — aiming an
+    // LFO at it is the barberpole effect.
+    shift: ['wet', 'shift', 'time', 'feedback', 'damp'],
+    // Retuning the bank rewrites four delay lines, so `tune` stays a setter.
+    resonator: ['wet', 'feedback'],
+    duck: ['wet', 'depth'],
+    tape: ['wet', 'time', 'feedback', 'damp'],
 }
 
 const FX_MOD_SCALE: Record<string, { scale: number, unit: string }> = {
@@ -282,6 +330,9 @@ const FX_MOD_SCALE: Record<string, { scale: number, unit: string }> = {
     rate: { scale: 10, unit: 'Hz' },
     feedback: { scale: 1, unit: '' },
     time: { scale: 0.5, unit: 's' },
+    damp: { scale: 8000, unit: 'Hz' },
+    shift: { scale: 500, unit: 'Hz' },
+    depth: { scale: 1, unit: '' },
 }
 
 /** The destination id for one param of one effect slot. */
@@ -469,7 +520,7 @@ export const LFO_RATE = { min: 0.01, max: 20 } as const
 export const MOD_DEPTH = { min: -1, max: 1 } as const
 
 /** Integer-valued params — knobs snap, coercion rounds. */
-export const INTEGER_PARAMS = new Set(['octave', 'semi', 'count'])
+export const INTEGER_PARAMS = new Set(['octave', 'semi', 'count', 'tune', 'voicing'])
 
 /* ------------------------------------------------------------------ */
 /* Which oscillator params are live for which mode                     */
@@ -553,11 +604,34 @@ export function defaultFxParams(): FxParams {
         feedback: 0.35,
         decay: 3,
         preDelay: 0.02,
+        pitch: 12,
+        damp: 4000,
+        shift: 40,
+        tune: 48,
+        voicing: 1,
     }
 }
 
 export function createFx(id: string, type: FxType = 'reverb'): FxSlot {
     return { id, type, enabled: true, wet: 0.3, params: defaultFxParams() }
+}
+
+/**
+ * Per-type starting points, where the shared defaults would land somewhere
+ * dull. Shimmer is the case that needs it: the flat defaults give it a short
+ * tail and barely any regeneration, which sounds like a slightly odd reverb
+ * rather than an octave ladder.
+ */
+export const FX_TYPE_DEFAULTS: Partial<Record<FxType, Partial<FxParams>>> = {
+    shimmer: { time: 0.35, feedback: 0.6, damp: 6000, decay: 6, pitch: 12 },
+    // A small shift and a long spacing: at large shifts every repeat is so
+    // far from the last that it reads as noise rather than harmony.
+    shift: { shift: 40, time: 0.4, feedback: 0.6, damp: 5000, decay: 6 },
+    resonator: { tune: 48, voicing: 1, feedback: 0.85, damp: 3000 },
+    // A deep, slow duck under a long tail is the setting worth defaulting to;
+    // shallow and fast just sounds like a broken compressor.
+    duck: { depth: 0.8, time: 0.4, decay: 8, preDelay: 0.02 },
+    tape: { time: 0.3, feedback: 0.45, drive: 0.15, damp: 3200, rate: 0.6, depth: 0.35 },
 }
 
 export function createRoute(id: string): ModRoute {

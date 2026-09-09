@@ -37,7 +37,7 @@ import {
     type TriggerMode,
 } from './patchTypes'
 
-export const GRAIN_PATCH_VERSION = 1
+export const GRAIN_PATCH_VERSION = 2
 
 /**
  * Voices are whole grain clouds, and a cloud costs far more than an
@@ -71,7 +71,12 @@ export interface GrainState {
     size: number
     /** grains per second, independent of size — that's what overlap means */
     density: number
-    /** random offset per grain, seconds either side of the head */
+    /**
+     * Random offset per grain, as a fraction of the whole buffer either side
+     * of the head. A fraction rather than seconds so that "grab from anywhere
+     * in the file" means the same thing whether the file is two seconds long
+     * or two minutes.
+     */
     spray: number
     /**
      * Window skew. 0 is a percussive grain that starts loud and decays, 1 is
@@ -166,7 +171,7 @@ export const GRAIN_DESTINATIONS: Record<string, GrainDestinationMeta> = {
     'grain.scan': { label: 'Scan Rate', scale: 2, unit: '×', regime: 'grain' },
     'grain.size': { label: 'Grain Size', scale: 0.25, unit: 's', regime: 'grain' },
     'grain.density': { label: 'Density', scale: 40, unit: '/s', regime: 'grain' },
-    'grain.spray': { label: 'Spray', scale: 1, unit: 's', regime: 'grain' },
+    'grain.spray': { label: 'Scatter', scale: 1, unit: '', regime: 'grain' },
     'grain.shape': { label: 'Shape', scale: 1, unit: '', regime: 'grain' },
     'grain.pitch': { label: 'Grain Pitch', scale: 1200, unit: 'cents', regime: 'grain' },
     'grain.jitter': { label: 'Pitch Jitter', scale: 1200, unit: 'cents', regime: 'grain' },
@@ -217,7 +222,7 @@ export const GRAIN_RANGES = {
     // it stops being a grain and starts being a loop.
     size: { min: 0.005, max: 0.5 },
     density: { min: 0.5, max: 80 },
-    spray: { min: 0, max: 2 },
+    spray: { min: 0, max: 1 },
     shape: { min: 0, max: 1 },
     jitter: { min: 0, max: 1200 },
     spread: { min: 0, max: 1 },
@@ -242,9 +247,13 @@ export const DEFAULT_GRAIN_PATCH: GrainPatchState = {
     grain: {
         position: 0.25,
         scan: 0.1,
-        size: 0.12,
-        density: 18,
-        spray: 0.08,
+        // Small grains at a healthy rate, with enough scatter to be obviously
+        // granular on load. The old defaults produced an overlap of two and a
+        // scatter of one percent of the buffer, which just sounded like
+        // playback with a filter on it.
+        size: 0.07,
+        density: 26,
+        spray: 0.18,
         shape: 0.5,
         jitter: 15,
         spread: 0.7,

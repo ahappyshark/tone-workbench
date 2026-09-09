@@ -5,6 +5,7 @@ import {
     createLFO,
     createRoute,
     isRouteLive,
+    FX_TYPE_DEFAULTS,
     modDestinations,
     type FxParams,
     type FxSlot,
@@ -119,12 +120,19 @@ export function updateFx(id: string, changes: Partial<Omit<FxSlot, 'id' | 'param
     const keys = Object.keys(changes) as (keyof typeof changes)[]
     if (keys.every(k => current[k] === changes[k])) return
     // Changing type changes which params exist, so routes into the old ones go.
-    const routes = changes.type && changes.type !== current.type
+    const retyped = changes.type !== undefined && changes.type !== current.type
+    const routes = retyped
         ? patch.modRoutes.filter(r => !r.destination.startsWith(`fx:${id}:`))
         : patch.modRoutes
+    // A newly chosen type gets its own starting points, but only the params
+    // that type actually uses — the rest stay as the slot left them, which is
+    // the whole reason the params record is flat.
+    const seed = retyped ? FX_TYPE_DEFAULTS[changes.type!] : undefined
     setPatch({
         ...patch,
-        fx: patch.fx.map(f => (f.id === id ? { ...f, ...changes } : f)),
+        fx: patch.fx.map(f => (f.id === id
+            ? { ...f, ...changes, params: seed ? { ...f.params, ...seed } : f.params }
+            : f)),
         modRoutes: routes,
     })
 }

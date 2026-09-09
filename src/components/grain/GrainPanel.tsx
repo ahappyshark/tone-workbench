@@ -121,7 +121,10 @@ function GrainPanel({ handle }: { handle: GrainHandle }) {
                 gap: 12,
                 marginTop: 12,
             }}>
-                <Section title="SCAN" hint="scan at zero freezes the head; negative crawls backwards">
+                <Section
+                    title="SCAN"
+                    hint="scan at zero freezes the head, negative crawls backwards · scatter is a fraction of the whole buffer, so 1.00 grabs from anywhere in it"
+                >
                     <div style={row}>
                         <Knob label="Position" min={GRAIN_RANGES.position.min} max={GRAIN_RANGES.position.max}
                             value={grain.position} defaultValue={d.grain.position}
@@ -129,7 +132,7 @@ function GrainPanel({ handle }: { handle: GrainHandle }) {
                         <Knob label="Scan" min={GRAIN_RANGES.scan.min} max={GRAIN_RANGES.scan.max}
                             value={grain.scan} defaultValue={d.grain.scan}
                             onChange={v => setGrainParam('grain', 'scan', v)} size={54} color="#ffff00" />
-                        <Knob label="Spray" min={GRAIN_RANGES.spray.min} max={GRAIN_RANGES.spray.max}
+                        <Knob label="Scatter" min={GRAIN_RANGES.spray.min} max={GRAIN_RANGES.spray.max}
                             value={grain.spray} defaultValue={d.grain.spray}
                             onChange={v => setGrainParam('grain', 'spray', v)} size={54} color="#aa44ff" />
                     </div>

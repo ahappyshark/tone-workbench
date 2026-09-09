@@ -33,7 +33,7 @@ export function useGrainEngine(): GrainHandle {
     // Generated during the first render rather than loaded in an effect, so
     // the instrument has something to granulate before it makes a sound at
     // all. See `grainSource` for why the starters aren't files.
-    const [buffer, setBuffer] = useState<GrainBuffer | null>(() => loadStarter('drone'))
+    const [buffer, setBuffer] = useState<GrainBuffer | null>(() => loadStarter('melody'))
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     // The engine is built once, in an effect that can't depend on the buffer

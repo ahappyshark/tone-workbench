@@ -114,10 +114,23 @@ grains degrades the texture; not having a cap degrades everything.
 without transposing them, which is what makes this sound like a Liven rather
 than a sampler. The drone switch holds one cloud open with no key at all.
 
-**Starter textures are generated, not shipped.** Additive synthesis at load
-time means the instrument makes sound the moment it opens without putting
-megabytes of audio in the repo, and they're written to granulate well: slow
-evolution, no silence, nothing percussive enough to machine-gun.
+**Scatter is a fraction of the buffer, not a number of seconds.** "Grab from
+anywhere in the file" has to mean the same thing whether the file is two
+seconds long or two minutes, and in seconds it does not.
+
+**Starter textures are generated, not shipped — and they must change across
+their length.** The first version got the second half exactly backwards. They
+were written to "granulate well": smooth, slowly evolving, no silence. That
+made them spectrally identical everywhere, with a measured window-to-window
+similarity of 0.998 or better end to end. Every grain control worked and none
+of them could be heard, because it does not matter where you read from a
+buffer that sounds the same all the way through. The replacements are built
+from discrete events at different pitches, timbres and attack shapes, with
+gaps between them, and score between 0.003 and 0.6 on the same test.
+
+The general lesson is worth keeping: **on stationary material, granular
+synthesis has no controls.** Position, scan and scatter are all only audible
+as the difference between one moment and another.
 
 ---
 
