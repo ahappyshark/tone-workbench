@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as Tone from 'tone'
-import { masterGain } from "../../audio/master";
+import { masterGain } from "../audio/master";
 
 const NOTES = ['C3', 'D3', 'E3', 'G3', 'A3', 'C4', 'D4', 'E4']
 const STEPS = 8

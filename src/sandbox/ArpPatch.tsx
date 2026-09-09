@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Tone from 'tone'
-import { masterGain } from '../../audio/master'
+import { masterGain } from '../audio/master'
 
 const NOTE_MAP: Record<string, number> = {
   'z': 60, 's': 61, 'x': 62, 'd': 63, 'c': 64, 'v': 65, 

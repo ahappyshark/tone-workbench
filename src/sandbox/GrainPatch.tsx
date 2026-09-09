@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Tone from 'tone'
-import { masterGain } from '../../audio/master'
-import Knob from '../controls/Knob'
+import { masterGain } from '../audio/master'
+import Knob from '../components/controls/Knob'
 
 function GrainPatch() {
   const playerRef = useRef<Tone.GrainPlayer | null>(null)

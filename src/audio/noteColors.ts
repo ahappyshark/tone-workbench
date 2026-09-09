@@ -38,7 +38,8 @@ export function noteToColor(note: string): string {
     const match = note.match(/^([A-G][#b]?)(\d+)$/)
     if (!match) return '#888888'
 
-    let [, letter, octaveStr] = match
+    const [, rawLetter, octaveStr] = match
+    let letter = rawLetter
     const octave = parseInt(octaveStr)
 
     if (flatToSharp[letter]) letter = flatToSharp[letter]

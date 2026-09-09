@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Tone from 'tone'
-import { masterGain } from '../../audio/master'
-import Knob from '../controls/Knob'
-import Slider from '../controls/Slider'
+import { masterGain } from '../audio/master'
+import Knob from '../components/controls/Knob'
+import Slider from './Slider'
 
 interface ADSRState {
     attack: number

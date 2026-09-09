@@ -1,110 +1,23 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import * as Tone from 'tone'
-import { useParamRegistry } from '../../context/ParamRegistry'
 import Knob from './Knob'
-
-type WaveformType = 'sine' | 'triangle' | 'sawtooth' | 'square'
+import Selector from './Selector'
+import TriggerTabs from './TriggerTabs'
+import type { InstrumentStore } from '../../state/instrumentStore'
+import { DIVISIONS, LFO_RATE, WAVES } from '../../audio/patchTypes'
 
 interface LFOModuleProps {
+  store: InstrumentStore
   id: string
-  onRemove: (id: string) => void
+  /** Shown so an unrouted LFO doesn't look broken. */
+  routeCount: number
 }
 
-function LFOModule({ id, onRemove }: LFOModuleProps) {
-  const lfoRef = useRef<Tone.LFO | null>(null)
-  const currentTargetRef = useRef<string | null>(null)
-  const { getAll } = useParamRegistry()
-
-  const [waveform, setWaveform] = useState<WaveformType>('sine')
-  const [rate, setRate] = useState(1)
-  const [min, setMin] = useState(0)
-  const [max, setMax] = useState(1)
-  const [target, setTarget] = useState<string>('')
-  const [running, setRunning] = useState(false)
-  const [paramRange, setParamRange] = useState<{ min: number, max: number } | null>(null)
-
-  useEffect(() => {
-    const lfo = new Tone.LFO({
-      type: waveform,
-      frequency: rate,
-      min,
-      max
-    }).start()
-
-    lfoRef.current = lfo
-
-    return () => {
-      lfo.dispose()
-    }
-  }, [])
-
-  const handleWaveform = (w: WaveformType) => {
-    setWaveform(w)
-    if (lfoRef.current) lfoRef.current.type = w
-  }
-
-  const handleRate = useCallback((v: number) => {
-    setRate(v)
-    if (lfoRef.current) lfoRef.current.frequency.rampTo(v, 0.1)
-  }, [])
-
-  const handleMin = useCallback((v: number) => {
-    setMin(v)
-    if (lfoRef.current) lfoRef.current.min = v
-  }, [])
-
-  const handleMax = useCallback((v: number) => {
-    setMax(v)
-    if (lfoRef.current) lfoRef.current.max = v
-  }, [])
-
-  const handleTarget = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newTarget = e.target.value
-    const lfo = lfoRef.current
-    if (!lfo) return
-
-    // disconnect from old target
-    if (currentTargetRef.current) {
-      const old = getAll().get(currentTargetRef.current)
-      if (old) {
-        try { lfo.disconnect(old.signal as any) } catch {}
-      }
-    }
-
-    // connect to new target
-    if (newTarget) {
-      const entry = getAll().get(newTarget)
-      if (entry) {
-        lfo.connect(entry.signal as any)
-        currentTargetRef.current = newTarget
-
-        if (entry.min !== undefined && entry.max !== undefined) {
-          setParamRange({ min: entry.min, max: entry.max })
-          setMin(entry.min)
-          setMax(entry.max)
-          lfo.min = entry.min
-          lfo.max = entry.max
-        }
-      }
-    } else {
-      currentTargetRef.current = null
-    }
-
-    setTarget(newTarget)
-  }
-
-  const toggleRunning = () => {
-    const lfo = lfoRef.current
-    if (!lfo) return
-    if (running) {
-      lfo.stop()
-    } else {
-      lfo.start()
-    }
-    setRunning(!running)
-  }
-
-  const params = [...getAll().entries()]
+/**
+ * An LFO is now purely a modulation *source* — where it goes is the mod
+ * matrix's business. Output is normalised to -1..1 like every other source.
+ */
+function LFOModule({ store, id, routeCount }: LFOModuleProps) {
+  const state = store.useLFOState(id)
+  if (!state) return null
 
   return (
     <div style={{
@@ -114,110 +27,78 @@ function LFOModule({ id, onRemove }: LFOModuleProps) {
       display: 'flex',
       flexDirection: 'column',
       gap: 10,
-      minWidth: 200
+      minWidth: 210,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 11, opacity: 0.5 }}>LFO</span>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
-            onClick={toggleRunning}
-            style={{ fontSize: 10, color: running ? '#00ff88' : '#888' }}
+            onClick={() => store.updateLFO(id, { running: !state.running })}
+            style={{ fontSize: 10, color: state.running ? '#00ff88' : '#888' }}
           >
-            {running ? '■ stop' : '▶ run'}
+            {state.running ? '■ stop' : '▶ run'}
           </button>
-          <button
-            onClick={() => onRemove(id)}
-            style={{ fontSize: 10, color: '#ff4444' }}
-          >
-            ✕
-          </button>
+          <button onClick={() => store.removeLFO(id)} style={{ fontSize: 10, color: '#ff4444' }}>✕</button>
         </div>
       </div>
 
-      {/* waveform selector */}
-      <div style={{ display: 'flex', gap: 4 }}>
-        {(['sine', 'triangle', 'sawtooth', 'square'] as WaveformType[]).map(w => (
-          <button
-            key={w}
-            onClick={() => handleWaveform(w)}
-            style={{
-              fontSize: 9,
-              padding: '2px 6px',
-              background: waveform === w ? '#00ff88' : '#333',
-              color: waveform === w ? '#000' : '#fff',
-              border: 'none',
-              borderRadius: 3,
-              cursor: 'pointer'
-            }}
-          >
-            {w}
-          </button>
-        ))}
-      </div>
+      <Selector options={WAVES} value={state.waveform} onChange={w => store.updateLFO(id, { waveform: w })} />
 
-      {/* knobs */}
-      <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-        <Knob
-          label="Rate"
-          min={0.01}
-          max={20}
-          value={rate}
-          defaultValue={1}
-          onChange={handleRate}
-          size={48}
-          color="#00ff88"
-        />
-        <Knob
-          label="Min"
-          min={paramRange?.min ?? -10000}
-          max={paramRange?.max ?? 10000}
-          value={min}
-          defaultValue={0}
-          onChange={handleMin}
-          size={48}
-          color="#ff8800"
-        />
-        <Knob
-          label="Max"
-          min={paramRange?.min ?? -10000}
-          max={paramRange?.max ?? 10000}
-          value={max}
-          defaultValue={1}
-          onChange={handleMax}
-          size={48}
-          color="#aa44ff"
-        />
-      </div>
-
-      {/* target selector */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <span style={{ fontSize: 10, opacity: 0.5 }}>Target</span>
-        <select
-          value={target}
-          onChange={handleTarget}
-          style={{
-            background: '#222',
-            color: '#fff',
-            border: '1px solid #444',
-            borderRadius: 4,
-            padding: '4px 6px',
-            fontSize: 11
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <TriggerTabs
+          value={state.trigger}
+          onChange={t => store.updateLFO(id, { trigger: t })}
+          titles={{
+            free: 'Runs continuously — wherever it happens to be when you play',
+            key: 'Phase restarts on every note-on, so the attack is repeatable',
+            sync: 'Rate locked to transport tempo; advances only while it runs',
           }}
-        >
-          <option value="">— none —</option>
-          {params.map(([id, entry]) => (
-            <option key={id} value={id}>{entry.label}</option>
-          ))}
-        </select>
+        />
+        {store.perVoiceLFOs && (
+          <button
+            onClick={() => store.updateLFO(id, { perVoice: !state.perVoice })}
+            style={tab(state.perVoice, '#aa44ff')}
+            title="One LFO per voice, so notes drift independently"
+          >per-voice</button>
+        )}
       </div>
 
-      {target && (
-        <div style={{ fontSize: 10, opacity: 0.4, textAlign: 'center' }}>
-          {min.toFixed(1)} → {max.toFixed(1)} @ {rate.toFixed(2)}hz
-        </div>
+      {state.trigger === 'sync'
+        ? <>
+            <Selector options={DIVISIONS} value={state.division}
+              onChange={d => store.updateLFO(id, { division: d })} color="#00aaff" />
+            <span style={{ fontSize: 9, opacity: 0.4 }}>runs only while the transport does</span>
+          </>
+        : <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <Knob label="Rate" min={LFO_RATE.min} max={LFO_RATE.max} value={state.rate}
+              defaultValue={1} onChange={v => store.updateLFO(id, { rate: v })} size={48} color="#00ff88" />
+          </div>}
+
+      {state.trigger === 'key' && !state.perVoice && (
+        <span style={{ fontSize: 9, opacity: 0.4, textAlign: 'center' }}>
+          shared — every note resets it for all of them
+        </span>
       )}
+
+      <span style={{ fontSize: 9, opacity: 0.4, textAlign: 'center' }}>
+        {routeCount === 0
+          ? 'not routed — add a route below'
+          : `${routeCount} route${routeCount === 1 ? '' : 's'}`}
+      </span>
     </div>
   )
+}
+
+function tab(active: boolean, color: string): React.CSSProperties {
+  return {
+    fontSize: 9,
+    padding: '2px 6px',
+    background: active ? color : '#333',
+    color: active ? '#000' : '#fff',
+    border: 'none',
+    borderRadius: 3,
+    cursor: 'pointer',
+  }
 }
 
 export default LFOModule

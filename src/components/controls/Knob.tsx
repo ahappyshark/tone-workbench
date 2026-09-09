@@ -9,6 +9,10 @@ interface KnobProps {
     defaultValue?: number
     size?: number
     color?: string
+    /** snap to a multiple of this — 1 for octave/semitone knobs */
+    step?: number
+    /** decimal places in the readout; inferred from step when omitted */
+    precision?: number
 }
 
 const MIN_ANGLE = -135
@@ -44,8 +48,11 @@ function Knob({
     onChange,
     defaultValue,
     size = 60,
-    color = '#00ff88'
+    color = '#00ff88',
+    step,
+    precision
 }: KnobProps) {
+    const decimals = precision ?? (step !== undefined && step >= 1 ? 0 : 2)
     const dragRef = useRef<{ startY: number, startValue: number } | null>(null)
     const cx = size /2
     const cy = size /2
@@ -65,9 +72,9 @@ function Knob({
         const dy = dragRef.current.startY - e.clientY
         const range = max - min
         const delta = (dy / 150) * range
-        const next = Math.min(max, Math.max(min, dragRef.current.startValue + delta))
-        onChange(next)
-    }, [min, max, onChange])
+        const raw = Math.min(max, Math.max(min, dragRef.current.startValue + delta))
+        onChange(step ? Math.round(raw / step) * step : raw)
+    }, [min, max, onChange, step])
 
     const onPointerUp = useCallback(() => {
         dragRef.current = null
@@ -129,7 +136,7 @@ function Knob({
                 />
             </svg>
             <span style={{fontSize: 10, opacity: 0.7, textAlign: 'center'}}>{label}</span>
-            <span style={{ fontSize: 10, color, fontFamily: 'monospace' }}>{value.toFixed(2)}</span>
+            <span style={{ fontSize: 10, color, fontFamily: 'monospace' }}>{value.toFixed(decimals)}</span>
         </div>
     )
 }
