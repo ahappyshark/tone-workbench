@@ -28,6 +28,20 @@ const PARAM_COLORS: Record<keyof FxParams, string> = {
     shift: '#00ff88',
     tune: '#00aaff',
     voicing: '#aa44ff',
+    // One colour per family rather than per knob: the smear has three of
+    // each, and telling low time from mid time matters less than telling a
+    // time from a feedback at a glance.
+    lowCross: '#ffff00',
+    highCross: '#ffff00',
+    lowTime: '#00aaff',
+    midTime: '#00aaff',
+    highTime: '#00aaff',
+    lowFeedback: '#ff8800',
+    midFeedback: '#ff8800',
+    highFeedback: '#ff8800',
+    width: '#aa44ff',
+    mono: '#ffff00',
+    offset: '#00aaff',
 }
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -51,6 +65,13 @@ const PARAM_PRECISION: Partial<Record<keyof FxParams, number>> = {
     shift: 0,
     tune: 0,
     voicing: 0,
+    lowCross: 0,
+    highCross: 0,
+    lowTime: 3,
+    midTime: 3,
+    highTime: 3,
+    mono: 0,
+    offset: 3,
 }
 
 function FxSlotPanel({ store, id, index, count, modCount }: {
@@ -134,6 +155,22 @@ function FxSlotPanel({ store, id, index, count, modCount }: {
                     />
                 ))}
             </div>
+
+            {slot.type === 'smear' && (
+                <span style={{ fontSize: 9, opacity: 0.55, fontFamily: 'monospace' }}>
+                    low ≤{Math.round(slot.params.lowCross)}Hz {slot.params.lowTime.toFixed(2)}s
+                    {' · '}mid {slot.params.midTime.toFixed(2)}s
+                    {' · '}high ≥{Math.round(slot.params.highCross)}Hz {slot.params.highTime.toFixed(2)}s
+                </span>
+            )}
+
+            {slot.type === 'dimension' && (
+                <span style={{ fontSize: 9, opacity: 0.55, fontFamily: 'monospace' }}>
+                    {slot.params.width === 0
+                        ? 'width 0 — collapsed to mono'
+                        : `sides only · below ${Math.round(slot.params.mono)}Hz stays centred`}
+                </span>
+            )}
 
             {slot.type === 'resonator' && (
                 <span style={{ fontSize: 9, opacity: 0.55, fontFamily: 'monospace' }}>

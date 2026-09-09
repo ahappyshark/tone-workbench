@@ -5,7 +5,7 @@
  * patch may live in component state, or it won't survive a save/load.
  */
 
-export const PATCH_VERSION = 7
+export const PATCH_VERSION = 8
 
 export const WAVES = ['sine', 'triangle', 'sawtooth', 'square'] as const
 export type Wave = typeof WAVES[number]
@@ -187,7 +187,7 @@ export interface ModEnvState extends EnvState {
 
 export const FX_TYPES = [
     'drive', 'chorus', 'delay', 'reverb',
-    'shimmer', 'shift', 'resonator', 'duck', 'tape',
+    'shimmer', 'shift', 'resonator', 'duck', 'tape', 'smear', 'dimension',
 ] as const
 export type FxType = typeof FX_TYPES[number]
 
@@ -201,6 +201,8 @@ export const FX_LABELS: Record<FxType, string> = {
     resonator: 'Resonator',
     duck: 'Ducked Verb',
     tape: 'Tape Echo',
+    smear: 'Multiband Smear',
+    dimension: 'Dimension',
 }
 
 /**
@@ -236,6 +238,28 @@ export interface FxParams {
     tune: number
     /** resonator: which voicing the bank is tuned to, an index into VOICINGS */
     voicing: number
+    /** smear: low/mid crossover in Hz */
+    lowCross: number
+    /** smear: mid/high crossover in Hz */
+    highCross: number
+    /** smear: delay time of the low band, in seconds */
+    lowTime: number
+    /** smear: delay time of the mid band, in seconds */
+    midTime: number
+    /** smear: delay time of the high band, in seconds */
+    highTime: number
+    /** smear: feedback of the low band */
+    lowFeedback: number
+    /** smear: feedback of the mid band */
+    midFeedback: number
+    /** smear: feedback of the high band */
+    highFeedback: number
+    /** dimension: side gain — 0 is mono, 1 is untouched, 2 is twice as wide */
+    width: number
+    /** dimension: sides are highpassed here, so below it stays centred */
+    mono: number
+    /** dimension: seconds the sides lag the middle by */
+    offset: number
 }
 
 export interface FxSlot {
@@ -265,6 +289,23 @@ export const FX_RANGES = {
     shift: { min: -500, max: 500 },
     tune: { min: 24, max: 84 },
     voicing: { min: 0, max: 3 },
+    // The two crossovers meet at 800 Hz and cannot pass each other. Ranges
+    // that overlapped would let the low crossover sit above the high one,
+    // which silences the mid band rather than doing anything musical, and
+    // clamping one knob against the other would make it read a lie.
+    lowCross: { min: 60, max: 800 },
+    highCross: { min: 800, max: 9000 },
+    lowTime: { min: 0.005, max: 2 },
+    midTime: { min: 0.005, max: 2 },
+    highTime: { min: 0.005, max: 2 },
+    lowFeedback: { min: 0, max: 0.95 },
+    midFeedback: { min: 0, max: 0.95 },
+    highFeedback: { min: 0, max: 0.95 },
+    width: { min: 0, max: 2 },
+    mono: { min: 20, max: 800 },
+    // Past about fifty milliseconds an offset stops reading as width and
+    // starts reading as a slap on one side.
+    offset: { min: 0, max: 0.05 },
 } as const
 
 /** Which knobs each effect actually has, in the order they should appear. */
@@ -281,6 +322,8 @@ export const FX_TYPE_PARAMS: Record<FxType, readonly (keyof FxParams)[]> = {
     // `time` here is how long the wet takes to come back after you stop.
     duck: ['depth', 'time', 'decay', 'preDelay'],
     tape: ['time', 'feedback', 'drive', 'damp', 'rate', 'depth'],
+    smear: ['lowCross', 'highCross', 'lowTime', 'midTime', 'highTime', 'lowFeedback', 'midFeedback', 'highFeedback'],
+    dimension: ['width', 'mono', 'offset', 'rate', 'depth'],
 }
 
 export const FX_PARAM_LABELS: Record<keyof FxParams | 'wet', string> = {
@@ -298,6 +341,17 @@ export const FX_PARAM_LABELS: Record<keyof FxParams | 'wet', string> = {
     shift: 'Shift Hz',
     tune: 'Root',
     voicing: 'Voicing',
+    lowCross: 'Low Xover',
+    highCross: 'High Xover',
+    lowTime: 'Low Time',
+    midTime: 'Mid Time',
+    highTime: 'High Time',
+    lowFeedback: 'Low FB',
+    midFeedback: 'Mid FB',
+    highFeedback: 'High FB',
+    width: 'Width',
+    mono: 'Mono Hz',
+    offset: 'Offset',
 }
 
 /**
@@ -323,6 +377,13 @@ export const FX_MOD_PARAMS: Record<FxType, readonly (keyof FxParams | 'wet')[]> 
     resonator: ['wet', 'feedback'],
     duck: ['wet', 'depth'],
     tape: ['wet', 'time', 'feedback', 'damp'],
+    // Everything on both of these is a real audio-rate param, so everything
+    // modulates. Nine destinations for one slot is a lot of dropdown, but
+    // cutting some of them would have been an arbitrary line rather than a
+    // property of the effect, which is the only reason anything else here is
+    // missing.
+    smear: ['wet', 'lowCross', 'highCross', 'lowTime', 'midTime', 'highTime', 'lowFeedback', 'midFeedback', 'highFeedback'],
+    dimension: ['wet', 'width', 'mono', 'offset', 'rate', 'depth'],
 }
 
 const FX_MOD_SCALE: Record<string, { scale: number, unit: string }> = {
@@ -333,6 +394,17 @@ const FX_MOD_SCALE: Record<string, { scale: number, unit: string }> = {
     damp: { scale: 8000, unit: 'Hz' },
     shift: { scale: 500, unit: 'Hz' },
     depth: { scale: 1, unit: '' },
+    lowCross: { scale: 800, unit: 'Hz' },
+    highCross: { scale: 8000, unit: 'Hz' },
+    lowTime: { scale: 0.5, unit: 's' },
+    midTime: { scale: 0.5, unit: 's' },
+    highTime: { scale: 0.5, unit: 's' },
+    lowFeedback: { scale: 1, unit: '' },
+    midFeedback: { scale: 1, unit: '' },
+    highFeedback: { scale: 1, unit: '' },
+    width: { scale: 1, unit: '' },
+    mono: { scale: 800, unit: 'Hz' },
+    offset: { scale: 0.05, unit: 's' },
 }
 
 /** The destination id for one param of one effect slot. */
@@ -609,6 +681,19 @@ export function defaultFxParams(): FxParams {
         shift: 40,
         tune: 48,
         voicing: 1,
+        lowCross: 250,
+        highCross: 2500,
+        // Long lows against short highs: the setting that reads as distance
+        // rather than as three delays.
+        lowTime: 0.5,
+        midTime: 0.28,
+        highTime: 0.09,
+        lowFeedback: 0.5,
+        midFeedback: 0.45,
+        highFeedback: 0.6,
+        width: 1.4,
+        mono: 120,
+        offset: 0.012,
     }
 }
 
@@ -632,6 +717,11 @@ export const FX_TYPE_DEFAULTS: Partial<Record<FxType, Partial<FxParams>>> = {
     // shallow and fast just sounds like a broken compressor.
     duck: { depth: 0.8, time: 0.4, decay: 8, preDelay: 0.02 },
     tape: { time: 0.3, feedback: 0.45, drive: 0.15, damp: 3200, rate: 0.6, depth: 0.35 },
+    // Smear needs no entry: its params belong to no other effect, so the flat
+    // defaults above are already its defaults. Dimension only needs one
+    // because it borrows the chorus's rate and depth, and a chorus's 1.5 Hz
+    // is a seasick wobble on the sides rather than a drift.
+    dimension: { rate: 0.4, depth: 0.5, width: 1.4, mono: 120, offset: 0.012 },
 }
 
 export function createRoute(id: string): ModRoute {
