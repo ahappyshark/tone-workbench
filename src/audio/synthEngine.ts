@@ -3,6 +3,7 @@ import { Voice, applyLFOSettings } from './voice'
 import {
     DEFAULT_PATCH,
     MOD_SOURCE_META,
+    type NotePriority,
     type LFOState,
     type ModRoute,
     type PatchState,
@@ -42,6 +43,14 @@ export class SynthEngine {
     private readonly globalLFOs = new Map<string, Tone.LFO>()
     private lfoStates: LFOState[] = []
 
+    /** Live pitch bend in cents, summed into every voice's oscillators. */
+    private readonly pitchBend: Tone.Signal<'cents'>
+    /** -1..1 as it arrives from the wheel; cents depend on bendRange. */
+    private bendPosition = 0
+    private sustainDown = false
+    /** keys released while the pedal is down, waiting for it to lift */
+    private readonly sustained = new Set<number>()
+
     constructor() {
         // 16 voices summing into one bus needs headroom; the master limiter
         // catches what's left.
@@ -51,6 +60,9 @@ export class SynthEngine {
             voice.output.connect(this.output)
             return voice
         })
+
+        this.pitchBend = new Tone.Signal(0)
+        for (const voice of this.voices) voice.connectPitchBend(this.pitchBend)
 
         this.modWheel = new Tone.Signal(0)
         this.random = new Tone.Signal(0)
@@ -73,6 +85,40 @@ export class SynthEngine {
     /** Live controller value, 0..1. Not patch state — it's a hand on a wheel. */
     setModWheel(value: number) {
         this.modWheel.value = Math.max(0, Math.min(1, value))
+    }
+
+    /** Wheel position, -1..1. Scaled to cents by the patch's bend range. */
+    setPitchBend(position: number) {
+        this.bendPosition = Math.max(-1, Math.min(1, position))
+        this.pitchBend.value = this.bendPosition * this.voiceState.bendRange * 100
+    }
+
+    /**
+     * Sustain pedal. While down, released keys keep sounding; lifting it
+     * releases everything that was let go in the meantime.
+     */
+    setSustain(down: boolean) {
+        if (this.sustainDown === down) return
+        this.sustainDown = down
+        if (down) return
+        if (this.voiceState.mode === 'poly') {
+            for (const note of this.sustained) {
+                const group = this.groups.get(note)
+                if (group) for (const v of group) v.release()
+            }
+        } else if (this.held.length === 0) {
+            for (const group of this.groups.values()) for (const v of group) v.release()
+        }
+        this.sustained.clear()
+    }
+
+    /** Which held key wins right now, or null if none are down. */
+    private priorityNote(): number | null {
+        if (this.held.length === 0) return null
+        const priority: NotePriority = this.voiceState.priority
+        if (priority === 'low') return Math.min(...this.held)
+        if (priority === 'high') return Math.max(...this.held)
+        return this.held[this.held.length - 1]
     }
 
     applyRandom(state: RandomState) {
@@ -256,37 +302,44 @@ export class SynthEngine {
             if (group.length === 0) return
             this.groups.set(midi, group)
             this.spreadGroup(group)
+            this.sustained.delete(midi)
             for (const v of group) v.trigger(midi, velocity)
             return
         }
 
-        // mono / legato — one group, last-note priority
+        // mono / legato — one group, the priority rule decides which key wins
         this.held = this.held.filter(n => n !== midi)
         this.held.push(midi)
+        const target = this.priorityNote()
+        if (target === null) return
 
         const existing = [...this.groups.entries()][0]
         if (existing) {
-            const [oldNote, group] = existing
-            this.groups.delete(oldNote)
-            this.groups.set(midi, group)
+            const [current, group] = existing
+            // Under low/high priority a key that doesn't win changes nothing —
+            // that's the whole point of holding a bass note and playing over it.
+            if (current === target) return
+            this.groups.delete(current)
+            this.groups.set(target, group)
             // legato re-pitches through the glide without restarting the
             // envelopes; mono restarts them on every key.
-            if (mode === 'legato') for (const v of group) v.retune(midi)
-            else for (const v of group) v.trigger(midi, velocity)
+            if (mode === 'legato') for (const v of group) v.retune(target)
+            else for (const v of group) v.trigger(target, velocity, true, true)
             return
         }
 
         const group = this.claim(unison)
         if (group.length === 0) return
-        this.groups.set(midi, group)
+        this.groups.set(target, group)
         this.spreadGroup(group)
-        for (const v of group) v.trigger(midi, velocity)
+        for (const v of group) v.trigger(target, velocity)
     }
 
     noteOff(midi: number) {
         if (this.voiceState.mode === 'poly') {
             const group = this.groups.get(midi)
             if (!group) return
+            if (this.sustainDown) { this.sustained.add(midi); return }
             for (const v of group) v.release()
             return
         }
@@ -296,17 +349,18 @@ export class SynthEngine {
         if (!existing) return
         const [current, group] = existing
 
-        if (this.held.length === 0) {
+        const next = this.priorityNote()
+        if (next === null) {
+            if (this.sustainDown) return
             for (const v of group) v.release()
             return
         }
-        // Fall back to the most recently pressed key still down.
-        const next = this.held[this.held.length - 1]
         if (next === current) return
         this.groups.delete(current)
         this.groups.set(next, group)
+        // Coming back to a still-held key slides rather than jumping.
         if (this.voiceState.mode === 'legato') for (const v of group) v.retune(next)
-        else for (const v of group) v.trigger(next, 0.8)
+        else for (const v of group) v.trigger(next, 0.8, true, true)
     }
 
     /**
@@ -320,6 +374,7 @@ export class SynthEngine {
         }
         this.groups.clear()
         this.held = []
+        this.sustained.clear()
     }
 
     /* -------------------------------------------------------------- */
@@ -354,6 +409,8 @@ export class SynthEngine {
         const previous = this.voiceState
         this.voiceState = state
         for (const v of this.voices) v.setGlide(state.glide)
+        // Bend range is patch state, so a live wheel position remaps with it.
+        this.pitchBend.value = this.bendPosition * state.bendRange * 100
 
         // Changing polyphony rules mid-note leaves groups that don't match the
         // new mode, so stop cleanly rather than stranding voices.
@@ -379,6 +436,7 @@ export class SynthEngine {
     }
 
     dispose() {
+        this.pitchBend.dispose()
         this.randomClock.dispose()
         this.randomLoop.dispose()
         for (const lfo of this.globalLFOs.values()) lfo.dispose()

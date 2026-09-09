@@ -5,7 +5,7 @@
  * patch may live in component state, or it won't survive a save/load.
  */
 
-export const PATCH_VERSION = 3
+export const PATCH_VERSION = 4
 
 export const WAVES = ['sine', 'triangle', 'sawtooth', 'square'] as const
 export type Wave = typeof WAVES[number]
@@ -29,6 +29,15 @@ export type NoiseType = typeof NOISE_TYPES[number]
 
 export const VOICE_MODES = ['poly', 'mono', 'legato'] as const
 export type VoiceMode = typeof VOICE_MODES[number]
+
+/**
+ * Which held key wins in mono/legato when several are down. They sound
+ * genuinely different under a trill and every mono synth picks one:
+ * `last` follows your most recent key, `low` lets a held bass note rule
+ * while you play above it, `high` is the mirror of that.
+ */
+export const NOTE_PRIORITIES = ['last', 'low', 'high'] as const
+export type NotePriority = typeof NOTE_PRIORITIES[number]
 
 export interface OscState {
     mode: OscMode
@@ -80,7 +89,15 @@ export interface EnvState {
 
 export interface VoiceState {
     mode: VoiceMode
-    /** portamento seconds */
+    /** which held key wins in mono/legato */
+    priority: NotePriority
+    /** pitch bend wheel range in semitones, either direction */
+    bendRange: number
+    /**
+     * Portamento seconds. Only applies when a sounding voice is re-pitched,
+     * which is mono and legato — a fresh note in poly starts at its own pitch
+     * rather than sliding up from whatever its recycled voice last played.
+     */
     glide: number
     /** voices consumed per note; > 1 costs polyphony */
     unison: number
@@ -220,6 +237,7 @@ export const ENV_RANGES = {
 
 export const VOICE_RANGES = {
     glide: { min: 0, max: 1 },
+    bendRange: { min: 0, max: 24 },
     unison: { min: 1, max: 8 },
     detune: { min: 0, max: 50 },
     spread: { min: 0, max: 1 },
@@ -293,7 +311,7 @@ export const DEFAULT_PATCH: PatchState = {
     filter: { type: 'lowpass', cutoff: 4000, resonance: 1, envAmount: 0, keyTrack: 0 },
     ampEnv: { attack: 0.01, decay: 0.2, sustain: 0.7, release: 0.6 },
     modEnv: { attack: 0.01, decay: 0.3, sustain: 0.2, release: 0.4 },
-    voice: { mode: 'poly', glide: 0, unison: 1, detune: 12, spread: 0.5 },
+    voice: { mode: 'poly', priority: 'last', bendRange: 2, glide: 0, unison: 1, detune: 12, spread: 0.5 },
     random: { rate: 4, sync: false, division: '8n' },
     lfos: [],
     modRoutes: [],
@@ -448,6 +466,8 @@ export function coercePatch(raw: unknown): PatchState {
         modEnv: coerceEnv(raw.modEnv, d.modEnv),
         voice: {
             mode: pick(rawVoice.mode, VOICE_MODES, d.voice.mode),
+            priority: pick(rawVoice.priority, NOTE_PRIORITIES, d.voice.priority),
+            bendRange: num(rawVoice.bendRange, d.voice.bendRange, VOICE_RANGES.bendRange, true),
             glide: num(rawVoice.glide, d.voice.glide, VOICE_RANGES.glide),
             unison: num(rawVoice.unison, d.voice.unison, VOICE_RANGES.unison, true),
             detune: num(rawVoice.detune, d.voice.detune, VOICE_RANGES.detune),

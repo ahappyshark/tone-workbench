@@ -45,6 +45,22 @@ export class Voice {
     private readonly envAmount: Tone.Gain
     private readonly panner: Tone.Panner
 
+    /**
+     * Base values for params that also receive modulation.
+     *
+     * Connecting anything to a Tone Param cancels its value, zeroes it and
+     * marks it `overridden` — after which writing `.value` silently does
+     * nothing. So a knob may not write such a param directly. Instead a
+     * dedicated signal supplies the base and the modulation sums on top; the
+     * base signal has no inputs of its own, so writing it works.
+     */
+    private readonly qBase: Tone.Signal<'number'>
+    private readonly levelBaseA: Tone.Signal<'number'>
+    private readonly levelBaseB: Tone.Signal<'number'>
+    private readonly levelBaseSub: Tone.Signal<'number'>
+    private readonly levelBaseNoise: Tone.Signal<'number'>
+    private readonly panBase: Tone.Signal<'number'>
+
     /** Per-voice modulation sources, held at a constant while a note sounds. */
     private readonly velocitySignal: Tone.Signal<'number'>
     private readonly keyTrackSignal: Tone.Signal<'number'>
@@ -100,6 +116,19 @@ export class Voice {
         this.velocitySignal = new Tone.Signal(0)
         this.keyTrackSignal = new Tone.Signal(0)
 
+        this.qBase = new Tone.Signal(DEFAULT_PATCH.filter.resonance)
+        this.levelBaseA = new Tone.Signal(DEFAULT_PATCH.oscA.level)
+        this.levelBaseB = new Tone.Signal(DEFAULT_PATCH.oscB.level)
+        this.levelBaseSub = new Tone.Signal(DEFAULT_PATCH.sub.level)
+        this.levelBaseNoise = new Tone.Signal(DEFAULT_PATCH.noise.level)
+        this.panBase = new Tone.Signal(0)
+        this.qBase.connect(this.filter.Q)
+        this.levelBaseA.connect(this.gainA.gain)
+        this.levelBaseB.connect(this.gainB.gain)
+        this.levelBaseSub.connect(this.gainSub.gain)
+        this.levelBaseNoise.connect(this.gainNoise.gain)
+        this.panBase.connect(this.panner.pan)
+
         this.oscA.connect(this.gainA)
         this.oscB.connect(this.gainB)
         this.sub.connect(this.gainSub)
@@ -126,7 +155,6 @@ export class Voice {
 
     setOsc(which: 'a' | 'b', state: OscState) {
         const osc = which === 'a' ? this.oscA : this.oscB
-        const gain = which === 'a' ? this.gainA : this.gainB
         if (which === 'a') this.stateA = state
         else this.stateB = state
 
@@ -148,29 +176,28 @@ export class Voice {
             }
         }
 
-        gain.gain.value = state.level
+        ;(which === 'a' ? this.levelBaseA : this.levelBaseB).value = state.level
         this.applyPitch()
     }
 
     setSub(state: SubState) {
         this.stateSub = state
         this.sub.type = state.wave
-        this.gainSub.gain.value = state.level
+        this.levelBaseSub.value = state.level
         this.applyPitch()
     }
 
     setNoise(state: NoiseState) {
         this.noise.type = state.type
-        this.gainNoise.gain.value = state.level
+        this.levelBaseNoise.value = state.level
     }
 
     setFilter(state: FilterState) {
         this.stateFilter = state
         this.filter.type = state.type
-        this.filter.frequency.value = state.cutoff
-        this.filter.Q.value = state.resonance
+        this.qBase.value = state.resonance
         this.envAmount.gain.value = state.envAmount
-        this.applyKeyTrack()
+        this.applyCutoff()
     }
 
     setAmpEnv(state: EnvState) {
@@ -189,7 +216,7 @@ export class Voice {
     /** Position within a unison group: detune in cents, pan in -1..1. */
     setUnison(detuneCents: number, pan: number) {
         this.unisonDetune = detuneCents
-        this.panner.pan.value = pan
+        this.panBase.value = pan
         this.applyPitch()
     }
 
@@ -206,6 +233,16 @@ export class Voice {
             case 'keyTrack': return this.keyTrackSignal
             default: return null
         }
+    }
+
+    /**
+     * Sum a shared bend signal (in cents) into this voice's pitch. It stacks
+     * with `fine` and unison offsets, which are set as the params' own values.
+     */
+    connectPitchBend(bend: Tone.Signal<'cents'>) {
+        bend.connect(this.oscA.detune)
+        bend.connect(this.oscB.detune)
+        bend.connect(this.sub.detune)
     }
 
     /** Create or update this voice's private copy of a per-voice LFO. */
@@ -289,12 +326,12 @@ export class Voice {
      * @param retrigger false re-pitches without restarting the envelopes,
      *   which is what legato mode means.
      */
-    trigger(note: number, velocity: number, retrigger = true) {
+    trigger(note: number, velocity: number, retrigger = true, glide = false) {
         this.note = note
         this.releasing = false
         this.startedAt = Tone.now()
-        this.applyPitch()
-        this.applyKeyTrack()
+        this.applyPitch(glide)
+        this.applyCutoff()
         this.velocitySignal.value = velocity
         // -1..1 across the playable range, centred on middle C.
         this.keyTrackSignal.value = Math.max(-1, Math.min(1, (note - 60) / 36))
@@ -311,10 +348,10 @@ export class Voice {
     }
 
     /** Re-pitch a sounding voice without touching its envelopes. */
-    retune(note: number) {
+    retune(note: number, glide = true) {
         this.note = note
-        this.applyPitch()
-        this.applyKeyTrack()
+        this.applyPitch(glide)
+        this.applyCutoff()
     }
 
     release() {
@@ -339,29 +376,43 @@ export class Voice {
 
     /* -------------------------------------------------------------- */
 
-    private applyPitch() {
+    /**
+     * @param glide slide from the current pitch rather than jumping. Only ever
+     *   true when a *sounding* voice is re-pitched; a fresh note must land on
+     *   its own pitch, or in poly it would swoop up from whatever the recycled
+     *   voice last played.
+     */
+    private applyPitch(glide = false) {
         if (this.note === null) return
-        const set = (signal: Tone.Signal<'frequency'>, midi: number) => {
-            const hz = Tone.Frequency(midi, 'midi').toFrequency()
-            if (this.glide > 0) signal.exponentialRampTo(hz, this.glide)
+        const slide = glide && this.glide > 0
+        // Fine tuning and unison detune go into the frequency itself rather
+        // than the detune param, because detune is a modulation destination
+        // (pitch bend, mod routes) and a connected param can't be written.
+        const set = (signal: Tone.Signal<'frequency'>, midi: number, cents: number) => {
+            const hz = Tone.Frequency(midi, 'midi').toFrequency() * Math.pow(2, cents / 1200)
+            if (slide) signal.exponentialRampTo(hz, this.glide)
             else signal.value = hz
         }
-        set(this.oscA.frequency, this.note + this.stateA.octave * 12 + this.stateA.semi)
-        set(this.oscB.frequency, this.note + this.stateB.octave * 12 + this.stateB.semi)
-        set(this.sub.frequency, this.note - this.stateSub.octave * 12)
-
-        this.oscA.detune.value = this.stateA.fine + this.unisonDetune
-        this.oscB.detune.value = this.stateB.fine + this.unisonDetune
-        this.sub.detune.value = this.unisonDetune
+        set(this.oscA.frequency, this.note + this.stateA.octave * 12 + this.stateA.semi,
+            this.stateA.fine + this.unisonDetune)
+        set(this.oscB.frequency, this.note + this.stateB.octave * 12 + this.stateB.semi,
+            this.stateB.fine + this.unisonDetune)
+        set(this.sub.frequency, this.note - this.stateSub.octave * 12, this.unisonDetune)
     }
 
     /**
-     * Cutoff follows the played pitch. Sits on detune as the *base* value; the
-     * mod envelope's connection sums on top of it.
+     * Cutoff, with key tracking folded in as a frequency multiplier.
+     *
+     * Key tracking used to be written to `filter.detune`, which the mod
+     * envelope connects to in the constructor — so it was overridden from
+     * birth and the Key Trk knob never did anything. `filter.frequency` takes
+     * no connections, so it can be written.
      */
-    private applyKeyTrack() {
-        if (this.note === null) return
-        this.filter.detune.value = (this.note - 60) * 100 * this.stateFilter.keyTrack
+    private applyCutoff() {
+        const cents = this.note === null
+            ? 0
+            : (this.note - 60) * 100 * this.stateFilter.keyTrack
+        this.filter.frequency.value = this.stateFilter.cutoff * Math.pow(2, cents / 1200)
     }
 
     dispose() {
@@ -373,6 +424,8 @@ export class Voice {
             this.gainA, this.gainB, this.gainSub, this.gainNoise,
             this.filter, this.amp, this.modEnv, this.envAmount,
             this.panner, this.output, this.velocitySignal, this.keyTrackSignal,
+            this.qBase, this.levelBaseA, this.levelBaseB, this.levelBaseSub,
+            this.levelBaseNoise, this.panBase,
         ]) {
             node.dispose()
         }

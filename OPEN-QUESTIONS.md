@@ -262,13 +262,12 @@ engine* (a flag in `PatchState`), never a second engine. Worth checking after
 phase 4 whether the packs actually sound distinct, or whether the engine is
 missing something that only one of them needs.
 
-### 18. Mono/legato note priority — **OPEN**
+### 18. Mono/legato note priority — **DONE**
 
-`mode: 'mono' | 'legato'` needs a note-priority rule for what happens when you
-release one of two held keys: last-note, low-note, or high-note priority. They
-sound meaningfully different under a trill and every hardware mono synth picks
-one. Default to last-note (most intuitive on a keyboard); worth exposing per
-patch only if a variant actually wants otherwise.
+All three shipped as a per-patch control, defaulting to last-note. Under
+low/high priority a key that doesn't win changes nothing at all — no
+retrigger, no pitch change — which is the point of holding a bass note and
+playing over it. Releasing the winner hands over to the next in line.
 
 ### 19. Oscillators run continuously — **OPEN (worse now)**
 
@@ -316,3 +315,40 @@ The same trap applies to `tone` itself (`?v=<hash>`), where it presents as an
 AudioContext mismatch. Restart the dev server before a test run, and treat
 "the UI stopped reacting to the store" as a suspected module-identity problem
 before debugging the store.
+
+### 23. Writing a Tone Param that also receives modulation — **DONE (and it was silent)**
+
+The nastiest bug of the project so far, found by phase 1's unison-beating test
+after phase 3 connected pitch bend.
+
+`connectSignal` (Tone `Signal.js`) does this to any `Param` or `Signal` you
+connect something to: cancels its scheduled values, sets it to 0, and marks it
+`overridden`. From then on `_fromType` returns 0 for every write, so
+`param.value = x` **silently does nothing**. No error, no warning.
+
+Every knob whose param is also a modulation destination was therefore dead the
+moment anything routed to it:
+
+- `filter.detune` takes the mod envelope from the constructor, so the **Key Trk
+  knob never worked at all**, from the day it was written.
+- `oscA/B.detune` carried fine tuning and unison detune; pitch bend connecting
+  in phase 3 killed both unconditionally.
+- `filter.Q`, the four level gains and `panner.pan` each died as soon as a
+  route pointed at them.
+
+The rule now: **a param that can receive modulation is never written
+directly.** Either fold the value into a param that takes no connections
+(fine/unison go into `frequency`; key tracking multiplies the cutoff), or give
+it a dedicated base `Tone.Signal` that supplies the value while modulation sums
+on top — a base signal has no inputs of its own, so writing it works.
+
+`phase3override.mjs` covers every destination that has both a knob and a route.
+Anything added to `MOD_DESTINATIONS` from here needs the same treatment and a
+row in that test.
+
+### 24. Computer-keyboard range — **DONE**
+
+A–K covered one octave, which isn't enough to play a bassline and a lead on the
+same patch. Z and X shift by octave, clamped to ±3, with the current range
+shown next to the title. Keys track the note they actually started, so a shift
+mid-note releases the right pitch instead of hanging it.

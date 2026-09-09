@@ -262,7 +262,7 @@ Each phase should end with something audible.
 |---|---|---|---|
 | 1 | ~~**Voice pool**~~ **DONE** | `Voice`, group allocator, stealing, unison/detune/spread, 2 osc + sub + noise, filter, amp + mod envelope. `Tone.PolySynth` is gone. | landed |
 | 2 | ~~**Mod matrix**~~ **DONE** | Routes, signed depth gains, `detune` routing, per-voice LFOs, velocity/key-track/mod-wheel/random sources, tempo sync. LFO target dropdown retired. | landed |
-| 3 | **Playability** | Glide, mono/legato note priority, velocity routing. Unison itself lands in phase 1 with the allocator. | small |
+| 3 | ~~**Playability**~~ **DONE** | Glide (mono/legato only), note priority, pitch bend, sustain pedal, keyboard octave shift. Velocity landed in phase 2. | landed |
 | 4 | **Effects chain** | Drive/waveshaper, chorus, delay, reverb, wet knobs, as patch state. | ~250 lines |
 | 5 | **Variants** | `Shark Ambient` and `Shark Aggro` preset packs. Generative sequencer for the ambient one (`SequencerPatch` and `ArpPatch` are the seed — OPEN-QUESTIONS #8). | data + one module |
 

@@ -11,6 +11,7 @@ import {
     FILTER_TYPES,
     NOISE_RANGES,
     NOISE_TYPES,
+    NOTE_PRIORITIES,
     OSC_MODES,
     OSC_RANGES,
     SUB_RANGES,
@@ -119,7 +120,7 @@ function EnvPanel({ which, title, color }: { which: 'ampEnv' | 'modEnv', title: 
 }
 
 function SynthPanel() {
-    useSynthEngine()
+    const keyboardOctave = useSynthEngine()
 
     const sub = useSection('sub')
     const noise = useSection('noise')
@@ -129,10 +130,19 @@ function SynthPanel() {
 
     // Unison consumes polyphony — say so rather than letting it be a mystery.
     const notes = voice.mode === 'poly' ? Math.floor(POLYPHONY / voice.unison) : 1
+    // A–K plays C4–C5 at shift 0; Z and X move it.
+    const lowKey = 60 + keyboardOctave * 12
+    const octaveName = (midi: number) => `C${Math.floor(midi / 12) - 1}`
 
     return (
         <div>
-            <h3>Shark Synth</h3>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                <h3 style={{ margin: '12px 0' }}>Shark Synth</h3>
+                <span style={{ fontSize: 10, opacity: 0.4 }}>
+                    keys A–K play {octaveName(lowKey)}–{octaveName(lowKey + 12)} · Z / X shift octave
+                    {keyboardOctave !== 0 && ` (${keyboardOctave > 0 ? '+' : ''}${keyboardOctave})`}
+                </span>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
                 <OscPanel which="oscA" />
                 <OscPanel which="oscB" />
@@ -174,6 +184,15 @@ function SynthPanel() {
 
                 <Section title="VOICE" note={`${notes} note${notes === 1 ? '' : 's'} of ${POLYPHONY}`}>
                     <Selector options={VOICE_MODES} value={voice.mode} onChange={v => setParam('voice', 'mode', v)} />
+                    {/* Priority and glide only mean anything with one voice
+                        chasing several keys, so don't offer them in poly. */}
+                    {voice.mode !== 'poly' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 9, opacity: 0.4 }}>priority</span>
+                            <Selector options={NOTE_PRIORITIES} value={voice.priority}
+                                onChange={v => setParam('voice', 'priority', v)} color="#ffff00" />
+                        </div>
+                    )}
                     <div style={row}>
                         <Knob label="Unison" min={VOICE_RANGES.unison.min} max={VOICE_RANGES.unison.max}
                             value={voice.unison} defaultValue={d.voice.unison} onChange={v => setParam('voice', 'unison', v)}
@@ -187,7 +206,16 @@ function SynthPanel() {
                         <Knob label="Glide" min={VOICE_RANGES.glide.min} max={VOICE_RANGES.glide.max}
                             value={voice.glide} defaultValue={d.voice.glide} onChange={v => setParam('voice', 'glide', v)}
                             size={48} color="#ff8800" />
+                        <Knob label="Bend Rng" min={VOICE_RANGES.bendRange.min} max={VOICE_RANGES.bendRange.max}
+                            value={voice.bendRange} defaultValue={d.voice.bendRange}
+                            onChange={v => setParam('voice', 'bendRange', v)}
+                            size={48} step={1} color="#00aaff" />
                     </div>
+                    {voice.mode === 'poly' && voice.glide > 0 && (
+                        <span style={{ fontSize: 9, opacity: 0.35 }}>
+                            glide only applies in mono and legato
+                        </span>
+                    )}
                 </Section>
             </div>
         </div>

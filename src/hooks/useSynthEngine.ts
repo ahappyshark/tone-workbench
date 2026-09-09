@@ -11,8 +11,10 @@ import { useKeyboard } from './useKeyboard'
  * One effect per patch section, so turning a filter knob doesn't re-apply the
  * oscillators. That works because the store replaces only the section that
  * changed, leaving every other section reference-stable.
+ *
+ * @returns the computer keyboard's current octave shift, for the UI to show.
  */
-export function useSynthEngine() {
+export function useSynthEngine(): number {
     const engineRef = useRef<SynthEngine | null>(null)
 
     // Declared first so the engine exists before the apply effects below run.
@@ -64,8 +66,19 @@ export function useSynthEngine() {
 
     const handleControlChange = useCallback((cc: number, value: number) => {
         if (cc === 1) engineRef.current?.setModWheel(value)
+        // CC64: anything from half-press up counts as down, per the MIDI spec.
+        if (cc === 64) engineRef.current?.setSustain(value >= 0.5)
     }, [])
 
-    useMidi({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff, onControlChange: handleControlChange })
-    useKeyboard({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff })
+    const handlePitchBend = useCallback((position: number) => {
+        engineRef.current?.setPitchBend(position)
+    }, [])
+
+    useMidi({
+        onNoteOn: handleNoteOn,
+        onNoteOff: handleNoteOff,
+        onControlChange: handleControlChange,
+        onPitchBend: handlePitchBend,
+    })
+    return useKeyboard({ onNoteOn: handleNoteOn, onNoteOff: handleNoteOff })
 }
