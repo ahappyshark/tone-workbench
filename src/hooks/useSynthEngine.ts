@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { masterGain } from '../audio/master'
 import { SynthEngine } from '../audio/synthEngine'
-import { getPatch, useLFOs, useSection, useSyncedRoutes } from '../state/patchStore'
+import { getPatch, useFx, useLFOs, useSection, useSyncedRoutes } from '../state/patchStore'
 import { useMidi } from './useMidi'
 import { useKeyboard } from './useKeyboard'
 
@@ -41,6 +41,7 @@ export function useSynthEngine(): number {
     const voice = useSection('voice')
     const random = useSection('random')
     const lfos = useLFOs()
+    const fx = useFx()
     const routes = useSyncedRoutes()
 
     useEffect(() => { engineRef.current?.applyOsc('a', oscA) }, [oscA])
@@ -52,9 +53,12 @@ export function useSynthEngine(): number {
     useEffect(() => { engineRef.current?.applyModEnv(modEnv) }, [modEnv])
     useEffect(() => { engineRef.current?.applyVoice(voice) }, [voice])
     useEffect(() => { engineRef.current?.applyRandom(random) }, [random])
-    // LFO nodes must exist before routes can point at them.
+    // LFO and effect nodes must exist before routes can point at them, and
+    // both lists are dependencies of the route effect for the same reason:
+    // rebuilding either invalidates the params the routes were wired to.
     useEffect(() => { engineRef.current?.applyLFOs(lfos) }, [lfos])
-    useEffect(() => { engineRef.current?.applyRoutes(routes) }, [routes, lfos])
+    useEffect(() => { engineRef.current?.applyFx(fx) }, [fx])
+    useEffect(() => { engineRef.current?.applyRoutes(routes) }, [routes, lfos, fx])
 
     const handleNoteOn = useCallback((midi: number, velocity: number) => {
         engineRef.current?.noteOn(midi, velocity)

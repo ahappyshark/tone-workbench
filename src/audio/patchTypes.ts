@@ -5,7 +5,7 @@
  * patch may live in component state, or it won't survive a save/load.
  */
 
-export const PATCH_VERSION = 4
+export const PATCH_VERSION = 5
 
 export const WAVES = ['sine', 'triangle', 'sawtooth', 'square'] as const
 export type Wave = typeof WAVES[number]
@@ -38,6 +38,22 @@ export type VoiceMode = typeof VOICE_MODES[number]
  */
 export const NOTE_PRIORITIES = ['last', 'low', 'high'] as const
 export type NotePriority = typeof NOTE_PRIORITIES[number]
+
+/**
+ * How a modulation source gets its phase.
+ *
+ * `free` runs continuously off the audio clock, `sync` locks to the transport
+ * and only advances while it runs, `key` restarts on every note-on. They are
+ * genuinely different musical behaviours, not presentation: a free LFO is
+ * wherever it happens to be when you play, a key-triggered one always starts
+ * at the same place, so only the second gives a repeatable attack.
+ *
+ * `key` and `sync` are mutually exclusive by definition — a synced source's
+ * phase belongs to the transport, and restarting it is the one thing that
+ * would break the lock.
+ */
+export const TRIGGER_MODES = ['free', 'key', 'sync'] as const
+export type TriggerMode = typeof TRIGGER_MODES[number]
 
 export interface OscState {
     mode: OscMode
@@ -114,26 +130,163 @@ export type Division = typeof DIVISIONS[number]
 export interface LFOState {
     id: string
     waveform: Wave
-    /** free-running rate in Hz, used when sync is off */
+    /** rate in Hz. Used by `free` and `key`; `sync` uses the division. */
     rate: number
-    /** lock the rate to transport tempo. Synced LFOs only run while the
-     *  transport does — that's what locking to it means. */
-    sync: boolean
+    /**
+     * `free` runs continuously, `key` restarts the phase on every note-on,
+     * `sync` locks the rate to transport tempo and only advances while the
+     * transport runs — that's what locking to it means.
+     */
+    trigger: TriggerMode
     division: Division
     /**
-     * One LFO per voice, retriggered on note-on, so each note drifts
-     * independently. Off means a single shared LFO and every note moves in
-     * lockstep.
+     * One LFO per voice, so each note drifts independently. Off means a single
+     * shared LFO and every note moves in lockstep.
+     *
+     * Orthogonal to `trigger`: per-voice decides how many LFOs there are, the
+     * trigger decides where their phase comes from. Per-voice + key is the
+     * combination that makes each note's wobble start from the same place as
+     * every other note's.
      */
     perVoice: boolean
     running: boolean
 }
 
-/** Stepped random / sample-and-hold. One global source. */
+/**
+ * Stepped random / sample-and-hold. One global source.
+ *
+ * `key` here means a fresh value per note-on rather than on a clock, which is
+ * the version you want for per-note variation that doesn't drift mid-note.
+ */
 export interface RandomState {
     rate: number
-    sync: boolean
+    trigger: TriggerMode
     division: Division
+}
+
+/**
+ * The mod envelope, plus how it repeats.
+ *
+ * `key` is an ordinary envelope: one shot per note-on. `free` and `sync`
+ * additionally re-trigger the attack on a clock while the note is held, which
+ * turns the envelope into a looping shape — an LFO whose waveform you drew
+ * with the ADSR knobs. Note-on still fires the attack in every mode, so a
+ * looping envelope starts with the note rather than wherever the loop was.
+ */
+export interface ModEnvState extends EnvState {
+    trigger: TriggerMode
+    /** loop rate in Hz when trigger is `free` */
+    rate: number
+    /** loop division when trigger is `sync` */
+    division: Division
+}
+
+/* ------------------------------------------------------------------ */
+/* Effects                                                             */
+/* ------------------------------------------------------------------ */
+
+export const FX_TYPES = ['drive', 'chorus', 'delay', 'reverb'] as const
+export type FxType = typeof FX_TYPES[number]
+
+export const FX_LABELS: Record<FxType, string> = {
+    drive: 'Drive',
+    chorus: 'Chorus',
+    delay: 'Delay',
+    reverb: 'Reverb',
+}
+
+/**
+ * Every effect's parameters in one flat record, the same trick `OscState`
+ * uses: the patch stores them all whatever the slot's current type is, so
+ * switching a slot to delay and back doesn't forget the chorus settings.
+ * `FX_TYPE_PARAMS` says which ones are live.
+ */
+export interface FxParams {
+    /** drive: waveshaper amount */
+    drive: number
+    /** chorus: LFO rate in Hz */
+    rate: number
+    /** chorus: LFO depth */
+    depth: number
+    /** chorus: stereo spread in degrees */
+    spread: number
+    /** delay: time in seconds */
+    time: number
+    /** chorus and delay: feedback */
+    feedback: number
+    /** reverb: tail length in seconds */
+    decay: number
+    /** reverb: seconds before the tail starts */
+    preDelay: number
+}
+
+export interface FxSlot {
+    id: string
+    type: FxType
+    /** a bypassed slot keeps its node and its settings, but leaves the chain */
+    enabled: boolean
+    wet: number
+    params: FxParams
+}
+
+export const FX_RANGES = {
+    wet: { min: 0, max: 1 },
+    drive: { min: 0, max: 1 },
+    rate: { min: 0.05, max: 10 },
+    depth: { min: 0, max: 1 },
+    spread: { min: 0, max: 180 },
+    time: { min: 0.005, max: 2 },
+    // 1.0 is a feedback loop that never decays; leave headroom below it.
+    feedback: { min: 0, max: 0.95 },
+    decay: { min: 0.1, max: 20 },
+    preDelay: { min: 0, max: 0.5 },
+} as const
+
+/** Which knobs each effect actually has, in the order they should appear. */
+export const FX_TYPE_PARAMS: Record<FxType, readonly (keyof FxParams)[]> = {
+    drive: ['drive'],
+    chorus: ['rate', 'depth', 'spread', 'feedback'],
+    delay: ['time', 'feedback'],
+    reverb: ['decay', 'preDelay'],
+}
+
+export const FX_PARAM_LABELS: Record<keyof FxParams | 'wet', string> = {
+    wet: 'Wet',
+    drive: 'Drive',
+    rate: 'Rate',
+    depth: 'Depth',
+    spread: 'Spread',
+    time: 'Time',
+    feedback: 'Feedback',
+    decay: 'Decay',
+    preDelay: 'Pre-Dly',
+}
+
+/**
+ * Which effect params can accept modulation, and what depth 1.0 means there.
+ *
+ * The rest are plain setters rather than audio-rate params, and they are not
+ * cheap: `distortion` rebuilds a waveshaper curve and `decay` re-renders an
+ * impulse response offline. Neither can follow an LFO, so neither is offered
+ * as a destination — that's a property of the effect, not a missing feature.
+ */
+export const FX_MOD_PARAMS: Record<FxType, readonly (keyof FxParams | 'wet')[]> = {
+    drive: ['wet'],
+    chorus: ['wet', 'rate', 'feedback'],
+    delay: ['wet', 'time', 'feedback'],
+    reverb: ['wet'],
+}
+
+const FX_MOD_SCALE: Record<string, { scale: number, unit: string }> = {
+    wet: { scale: 1, unit: '' },
+    rate: { scale: 10, unit: 'Hz' },
+    feedback: { scale: 1, unit: '' },
+    time: { scale: 0.5, unit: 's' },
+}
+
+/** The destination id for one param of one effect slot. */
+export function fxDestinationId(slotId: string, param: string): string {
+    return `fx:${slotId}:${param}`
 }
 
 /**
@@ -168,7 +321,18 @@ export const MOD_SOURCE_META: Record<FixedModSource, { label: string, perVoice: 
  * frequency (linear Hz), so a given depth sweeps the same number of octaves
  * wherever the knob happens to sit.
  */
-export const MOD_DESTINATIONS: Record<string, { label: string, scale: number, unit: string }> = {
+export interface ModDestinationMeta {
+    label: string
+    scale: number
+    unit: string
+    /**
+     * Lives on the shared effects bus rather than inside a voice, so it can
+     * only be fed by a source there is exactly one of. See `modDestinations`.
+     */
+    global?: boolean
+}
+
+export const MOD_DESTINATIONS: Record<string, ModDestinationMeta> = {
     'filter.detune': { label: 'Filter Cutoff', scale: 4800, unit: 'cents' },
     'filter.resonance': { label: 'Filter Reso', scale: 20, unit: '' },
     'oscA.detune': { label: 'Osc A Pitch', scale: 1200, unit: 'cents' },
@@ -180,6 +344,52 @@ export const MOD_DESTINATIONS: Record<string, { label: string, scale: number, un
     'amp.pan': { label: 'Pan', scale: 1, unit: '' },
 }
 
+/**
+ * Every destination available in the current patch: the fixed per-voice set
+ * above, plus one entry per modulatable param of each effect slot.
+ *
+ * Effects are global — one chain, after the voices are summed — so their
+ * params are marked `global`. A per-voice source can't reach them: there are
+ * sixteen mod envelopes and one delay time, and no honest answer to which
+ * envelope wins. `isRouteLive` is what the UI uses to say so out loud rather
+ * than letting such a route sit there doing nothing.
+ */
+export function modDestinations(fx: FxSlot[]): Record<string, ModDestinationMeta> {
+    const all: Record<string, ModDestinationMeta> = { ...MOD_DESTINATIONS }
+    fx.forEach((slot, i) => {
+        for (const param of FX_MOD_PARAMS[slot.type]) {
+            const scale = FX_MOD_SCALE[param] ?? { scale: 1, unit: '' }
+            all[fxDestinationId(slot.id, param)] = {
+                label: `FX ${i + 1} ${FX_LABELS[slot.type]} · ${FX_PARAM_LABELS[param]}`,
+                scale: scale.scale,
+                unit: scale.unit,
+                global: true,
+            }
+        }
+    })
+    return all
+}
+
+/** True when a source is the only one of its kind, so a global param can use it. */
+export function isGlobalSource(sourceId: string, lfos: LFOState[]): boolean {
+    if (sourceId.startsWith('lfo:')) {
+        const lfo = lfos.find(l => l.id === sourceId.slice(4))
+        return lfo ? !lfo.perVoice : false
+    }
+    const meta = MOD_SOURCE_META[sourceId as FixedModSource]
+    return meta ? !meta.perVoice : false
+}
+
+/**
+ * Whether a route will actually do anything. The one way to write a dead
+ * route is aiming a per-voice source at a global effect param.
+ */
+export function isRouteLive(route: ModRoute, fx: FxSlot[], lfos: LFOState[]): boolean {
+    const meta = modDestinations(fx)[route.destination]
+    if (!meta) return false
+    return meta.global ? isGlobalSource(route.source, lfos) : true
+}
+
 export interface PatchState {
     version: number
     name: string
@@ -189,10 +399,12 @@ export interface PatchState {
     noise: NoiseState
     filter: FilterState
     ampEnv: EnvState
-    modEnv: EnvState
+    modEnv: ModEnvState
     voice: VoiceState
     random: RandomState
     lfos: LFOState[]
+    /** the effects chain, in signal order — index 0 is nearest the voices */
+    fx: FxSlot[]
     modRoutes: ModRoute[]
 }
 
@@ -310,15 +522,33 @@ export const DEFAULT_PATCH: PatchState = {
     noise: { type: 'white', level: 0 },
     filter: { type: 'lowpass', cutoff: 4000, resonance: 1, envAmount: 0, keyTrack: 0 },
     ampEnv: { attack: 0.01, decay: 0.2, sustain: 0.7, release: 0.6 },
-    modEnv: { attack: 0.01, decay: 0.3, sustain: 0.2, release: 0.4 },
+    modEnv: { attack: 0.01, decay: 0.3, sustain: 0.2, release: 0.4, trigger: 'key', rate: 1, division: '4n' },
     voice: { mode: 'poly', priority: 'last', bendRange: 2, glide: 0, unison: 1, detune: 12, spread: 0.5 },
-    random: { rate: 4, sync: false, division: '8n' },
+    random: { rate: 4, trigger: 'free', division: '8n' },
     lfos: [],
+    fx: [],
     modRoutes: [],
 }
 
 export function createLFO(id: string): LFOState {
-    return { id, waveform: 'sine', rate: 1, sync: false, division: '8n', perVoice: false, running: true }
+    return { id, waveform: 'sine', rate: 1, trigger: 'free', division: '8n', perVoice: false, running: true }
+}
+
+export function defaultFxParams(): FxParams {
+    return {
+        drive: 0.4,
+        rate: 1.5,
+        depth: 0.6,
+        spread: 180,
+        time: 0.25,
+        feedback: 0.35,
+        decay: 3,
+        preDelay: 0.02,
+    }
+}
+
+export function createFx(id: string, type: FxType = 'reverb'): FxSlot {
+    return { id, type, enabled: true, wet: 0.3, params: defaultFxParams() }
 }
 
 export function createRoute(id: string): ModRoute {
@@ -380,6 +610,26 @@ function coerceEnv(raw: unknown, base: EnvState): EnvState {
 }
 
 /**
+ * Trigger mode, tolerating the `sync: boolean` that versions 2–4 wrote. That
+ * flag only ever distinguished free from sync, so an old preset can never
+ * mean `key` and the mapping is lossless.
+ */
+function coerceTrigger(r: Record<string, unknown>, base: TriggerMode): TriggerMode {
+    if (typeof r.trigger === 'string') return pick(r.trigger, TRIGGER_MODES, base)
+    if (typeof r.sync === 'boolean') return r.sync ? 'sync' : 'free'
+    return base
+}
+
+function coerceFxParams(raw: unknown): FxParams {
+    const r = isRecord(raw) ? raw : {}
+    const base = defaultFxParams()
+    const keys = Object.keys(base) as (keyof FxParams)[]
+    const out = {} as FxParams
+    for (const key of keys) out[key] = num(r[key], base[key], FX_RANGES[key])
+    return out
+}
+
+/**
  * Turn arbitrary parsed JSON into a valid PatchState.
  *
  * Preset files are user-editable and travel between machines, so anything
@@ -410,12 +660,31 @@ export function coercePatch(raw: unknown): PatchState {
             id,
             waveform: pick(entry.waveform, WAVES, base.waveform),
             rate: num(entry.rate, base.rate, LFO_RATE),
-            sync: bool(entry.sync, base.sync),
+            trigger: coerceTrigger(entry, base.trigger),
             division: pick(entry.division, DIVISIONS, base.division),
             perVoice: bool(entry.perVoice, base.perVoice),
             running: bool(entry.running, base.running),
         }
     })
+
+    const fxIds = new Set<string>()
+    const rawFx = Array.isArray(raw.fx) ? raw.fx : []
+    const fx: FxSlot[] = rawFx.filter(isRecord).map((entry, i) => {
+        const base = createFx(`fx-${i}`)
+        let id = str(entry.id, base.id)
+        while (fxIds.has(id)) id = `${id}-dup`
+        fxIds.add(id)
+        return {
+            id,
+            type: pick(entry.type, FX_TYPES, base.type),
+            enabled: bool(entry.enabled, base.enabled),
+            wet: num(entry.wet, base.wet, FX_RANGES.wet),
+            params: coerceFxParams(entry.params),
+        }
+    })
+    // Destinations depend on which slots exist, so the chain has to be settled
+    // before routes can be checked against it.
+    const destinations = modDestinations(fx)
 
     const routeIds = new Set<string>()
     const rawRoutes = Array.isArray(raw.modRoutes) ? raw.modRoutes : []
@@ -434,7 +703,9 @@ export function coercePatch(raw: unknown): PatchState {
         return {
             id,
             source: sourceOk ? source : base.source,
-            destination: str(entry.destination, base.destination) in MOD_DESTINATIONS
+            // A route pointing at an effect slot that isn't in this patch has
+            // nowhere to land, so it falls back rather than silently persisting.
+            destination: str(entry.destination, base.destination) in destinations
                 ? str(entry.destination, base.destination)
                 : base.destination,
             depth: num(entry.depth, base.depth, MOD_DEPTH),
@@ -463,7 +734,12 @@ export function coercePatch(raw: unknown): PatchState {
             keyTrack: num(rawFilter.keyTrack, d.filter.keyTrack, FILTER_RANGES.keyTrack),
         },
         ampEnv: coerceEnv(raw.ampEnv, d.ampEnv),
-        modEnv: coerceEnv(raw.modEnv, d.modEnv),
+        modEnv: {
+            ...coerceEnv(raw.modEnv, d.modEnv),
+            trigger: coerceTrigger(isRecord(raw.modEnv) ? raw.modEnv : {}, d.modEnv.trigger),
+            rate: num(isRecord(raw.modEnv) ? raw.modEnv.rate : undefined, d.modEnv.rate, LFO_RATE),
+            division: pick(isRecord(raw.modEnv) ? raw.modEnv.division : undefined, DIVISIONS, d.modEnv.division),
+        },
         voice: {
             mode: pick(rawVoice.mode, VOICE_MODES, d.voice.mode),
             priority: pick(rawVoice.priority, NOTE_PRIORITIES, d.voice.priority),
@@ -475,10 +751,11 @@ export function coercePatch(raw: unknown): PatchState {
         },
         random: {
             rate: num(rawRandom.rate, d.random.rate, LFO_RATE),
-            sync: bool(rawRandom.sync, d.random.sync),
+            trigger: coerceTrigger(rawRandom, d.random.trigger),
             division: pick(rawRandom.division, DIVISIONS, d.random.division),
         },
         lfos,
+        fx,
         modRoutes,
     }
 }

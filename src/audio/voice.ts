@@ -5,6 +5,7 @@ import {
     OSC_MODE_PARAMS,
     omniType,
     type LFOState,
+    type TriggerMode,
     type EnvState,
     type FilterState,
     type NoiseState,
@@ -65,7 +66,7 @@ export class Voice {
     private readonly velocitySignal: Tone.Signal<'number'>
     private readonly keyTrackSignal: Tone.Signal<'number'>
     /** Per-voice LFO instances, keyed by LFO id. Only for perVoice LFOs. */
-    private readonly lfos = new Map<string, Tone.LFO>()
+    private readonly lfos = new Map<string, { lfo: Tone.LFO, trigger: TriggerMode }>()
     /** routeId -> the depth gain wiring one source into one destination */
     private readonly routes = new Map<string, {
         gain: Tone.Gain
@@ -226,7 +227,7 @@ export class Voice {
 
     /** The node behind a per-voice source id, or null if this voice has none. */
     sourceNode(id: string): Tone.ToneAudioNode | null {
-        if (id.startsWith('lfo:')) return this.lfos.get(id.slice(4)) ?? null
+        if (id.startsWith('lfo:')) return this.lfos.get(id.slice(4))?.lfo ?? null
         switch (id) {
             case 'modEnv': return this.modEnv
             case 'velocity': return this.velocitySignal
@@ -247,19 +248,20 @@ export class Voice {
 
     /** Create or update this voice's private copy of a per-voice LFO. */
     syncLFO(state: LFOState) {
-        let lfo = this.lfos.get(state.id)
-        if (!lfo) {
+        let entry = this.lfos.get(state.id)
+        if (!entry) {
             // -1..1 so every source reaches the matrix on the same scale.
-            lfo = new Tone.LFO({ min: -1, max: 1 })
-            this.lfos.set(state.id, lfo)
+            entry = { lfo: new Tone.LFO({ min: -1, max: 1 }), trigger: state.trigger }
+            this.lfos.set(state.id, entry)
         }
-        applyLFOSettings(lfo, state)
+        entry.trigger = state.trigger
+        applyLFOSettings(entry.lfo, state)
     }
 
     dropLFO(id: string) {
-        const lfo = this.lfos.get(id)
-        if (!lfo) return
-        lfo.dispose()
+        const entry = this.lfos.get(id)
+        if (!entry) return
+        entry.lfo.dispose()
         this.lfos.delete(id)
     }
 
@@ -338,13 +340,34 @@ export class Voice {
         if (retrigger) {
             this.amp.triggerAttack(undefined, velocity)
             this.modEnv.triggerAttack()
-            // Restarting each voice's own LFOs is what makes notes drift
-            // independently rather than moving in lockstep.
-            for (const lfo of this.lfos.values()) {
-                lfo.stop()
-                lfo.start()
-            }
+            this.restartKeyedLFOs()
         }
+    }
+
+    /**
+     * Restart the phase of this voice's key-triggered LFOs.
+     *
+     * Only `key` ones: a `free` LFO is meant to be wherever it happens to be
+     * when you play, and a `sync` one belongs to the transport — restarting it
+     * would break the lock that syncing exists to provide.
+     */
+    private restartKeyedLFOs() {
+        for (const { lfo, trigger } of this.lfos.values()) {
+            if (trigger !== 'key') continue
+            lfo.stop()
+            lfo.start()
+        }
+    }
+
+    /**
+     * Re-fire the mod envelope's attack without touching the note or the amp.
+     * This is what turns the envelope into a looping shape when its trigger
+     * is `free` or `sync`; the engine owns the clock so all voices cycle
+     * together rather than each carrying its own.
+     */
+    retriggerModEnv(time?: number) {
+        if (this.note === null || this.releasing) return
+        this.modEnv.triggerAttack(time)
     }
 
     /** Re-pitch a sounding voice without touching its envelopes. */
@@ -417,7 +440,7 @@ export class Voice {
 
     dispose() {
         for (const id of [...this.routes.keys()]) this.clearRoute(id)
-        for (const lfo of this.lfos.values()) lfo.dispose()
+        for (const { lfo } of this.lfos.values()) lfo.dispose()
         this.lfos.clear()
         for (const node of [
             this.oscA, this.oscB, this.sub, this.noise,
@@ -441,7 +464,7 @@ export function applyLFOSettings(lfo: Tone.LFO, state: LFOState) {
     lfo.unsync()
     lfo.type = state.waveform
 
-    if (state.sync) {
+    if (state.trigger === 'sync') {
         // Order matters. sync() captures the frequency signal's *current*
         // value as its ratio against the transport's bpm, so the division has
         // to be set first — assigning it afterwards overwrites the synced

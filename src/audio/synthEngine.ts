@@ -1,8 +1,12 @@
 import * as Tone from 'tone'
 import { Voice, applyLFOSettings } from './voice'
+import { FxRack } from './fxRack'
 import {
     DEFAULT_PATCH,
     MOD_SOURCE_META,
+    modDestinations,
+    type FxSlot,
+    type ModEnvState,
     type NotePriority,
     type LFOState,
     type ModRoute,
@@ -24,9 +28,14 @@ export const POLYPHONY = 16
  * detune collapses to whatever half survived.
  */
 export class SynthEngine {
+    /** The end of the chain, past the effects. What the master connects to. */
     readonly output: Tone.Gain
 
     private readonly voices: Voice[]
+    /** where the voices sum, before the effects */
+    private readonly voiceBus: Tone.Gain
+    private readonly fx: FxRack
+    private fxStates: FxSlot[] = []
     /** note -> the voices sounding it. At most one entry in mono/legato. */
     private readonly groups = new Map<number, Voice[]>()
     /** held keys, oldest first — last-note priority for mono. */
@@ -42,6 +51,17 @@ export class SynthEngine {
     private readonly randomLoop: Tone.Loop
     private readonly globalLFOs = new Map<string, Tone.LFO>()
     private lfoStates: LFOState[] = []
+    private randomTrigger: RandomState['trigger'] = DEFAULT_PATCH.random.trigger
+
+    /**
+     * The mod envelope's loop clock. Two of them for the same reason the S&H
+     * has two: a free loop must run off the audio clock whatever the transport
+     * is doing, and a synced one must run on the transport and stop with it.
+     * One clock drives all sixteen voices, so a looping envelope stays in
+     * phase across a chord instead of each note wandering off.
+     */
+    private readonly modEnvClock: Tone.Clock
+    private readonly modEnvLoop: Tone.Loop
 
     /** Live pitch bend in cents, summed into every voice's oscillators. */
     private readonly pitchBend: Tone.Signal<'cents'>
@@ -54,10 +74,14 @@ export class SynthEngine {
     constructor() {
         // 16 voices summing into one bus needs headroom; the master limiter
         // catches what's left.
-        this.output = new Tone.Gain(0.25)
+        this.voiceBus = new Tone.Gain(0.25)
+        this.fx = new FxRack()
+        this.output = new Tone.Gain(1)
+        this.voiceBus.connect(this.fx.input)
+        this.fx.output.connect(this.output)
         this.voices = Array.from({ length: POLYPHONY }, () => {
             const voice = new Voice()
-            voice.output.connect(this.output)
+            voice.output.connect(this.voiceBus)
             return voice
         })
 
@@ -72,10 +96,20 @@ export class SynthEngine {
         // scheduled on the transport, so a *synced* S&H correctly only ticks
         // while the transport runs — but a free-running one must not depend
         // on the transport at all, and Tone.Clock runs off the audio context.
-        const step = () => { this.random.value = Math.random() * 2 - 1 }
+        const step = () => this.stepRandom()
         this.randomClock = new Tone.Clock(step, 4)
         this.randomLoop = new Tone.Loop(step, '8n')
         this.randomClock.start()
+
+        const loopModEnv = (time: number) => {
+            for (const voice of this.voices) voice.retriggerModEnv(time)
+        }
+        this.modEnvClock = new Tone.Clock(loopModEnv, 1)
+        this.modEnvLoop = new Tone.Loop(loopModEnv, '4n')
+    }
+
+    private stepRandom() {
+        this.random.value = Math.random() * 2 - 1
     }
 
     /* -------------------------------------------------------------- */
@@ -122,10 +156,15 @@ export class SynthEngine {
     }
 
     applyRandom(state: RandomState) {
-        if (state.sync) {
+        this.randomTrigger = state.trigger
+        if (state.trigger === 'sync') {
             this.randomClock.stop()
             this.randomLoop.interval = state.division
             this.randomLoop.start(0)
+        } else if (state.trigger === 'key') {
+            // No clock at all: the value changes when you play, and holds.
+            this.randomClock.stop()
+            this.randomLoop.stop()
         } else {
             this.randomLoop.stop()
             this.randomClock.frequency.value = Math.max(state.rate, 0.01)
@@ -168,17 +207,65 @@ export class SynthEngine {
         }
     }
 
-    /** Wire every route into every voice. Depth-only changes reuse the gain. */
+    /** The effects chain. Must be applied before the routes that target it. */
+    applyFx(states: FxSlot[]) {
+        this.fxStates = states
+        this.fx.apply(states)
+    }
+
+    /**
+     * Wire every route.
+     *
+     * Per-voice destinations are wired into all sixteen voices; effect params
+     * live on one shared chain and are wired once. An effect param can only
+     * be driven by a source there is one of — a per-voice LFO or a mod
+     * envelope has sixteen simultaneous values and one delay time to put them
+     * in, so those routes are simply not connected. `isRouteLive` in the patch
+     * types is the same rule, and it's what the matrix uses to say so.
+     */
     applyRoutes(routes: ModRoute[]) {
         const wanted = new Set(routes.map(r => r.id))
+        const destinations = modDestinations(this.fxStates)
+
+        for (const id of this.fx.routeIds()) {
+            if (!wanted.has(id)) this.fx.clearRoute(id)
+        }
         for (const voice of this.voices) {
             for (const id of voice.routeIds()) {
                 if (!wanted.has(id)) voice.clearRoute(id)
             }
-            for (const route of routes) {
+        }
+
+        for (const route of routes) {
+            const meta = destinations[route.destination]
+            if (meta?.global) {
+                for (const voice of this.voices) voice.clearRoute(route.id)
+                this.fx.setRoute(
+                    route.id,
+                    this.globalSourceFor(route.source),
+                    route.destination,
+                    route.depth * meta.scale,
+                )
+                continue
+            }
+            this.fx.clearRoute(route.id)
+            for (const voice of this.voices) {
                 voice.setRoute(route.id, this.sourceFor(route.source, voice), route.destination, route.depth)
             }
         }
+    }
+
+    /** The single node behind a source, or null if there are sixteen of them. */
+    private globalSourceFor(sourceId: string): Tone.ToneAudioNode | null {
+        if (sourceId.startsWith('lfo:')) {
+            const id = sourceId.slice(4)
+            const state = this.lfoStates.find(l => l.id === id)
+            if (!state || state.perVoice) return null
+            return this.globalLFOs.get(id) ?? null
+        }
+        const meta = MOD_SOURCE_META[sourceId as keyof typeof MOD_SOURCE_META]
+        if (!meta || meta.perVoice) return null
+        return sourceId === 'modWheel' ? this.modWheel : this.random
     }
 
     private sourceFor(sourceId: string, voice: Voice): Tone.ToneAudioNode | null {
@@ -192,6 +279,25 @@ export class SynthEngine {
         if (!meta) return null
         if (meta.perVoice) return voice.sourceNode(sourceId)
         return sourceId === 'modWheel' ? this.modWheel : this.random
+    }
+
+    /**
+     * What a note-on does to the shared modulation sources.
+     *
+     * Per-voice sources restart inside `Voice.trigger`; these are the ones
+     * there is only one of, so every note resets the same node and the whole
+     * keyboard snaps into phase together. Synced sources are left alone —
+     * their phase belongs to the transport.
+     */
+    private keyTrigger() {
+        if (this.randomTrigger === 'key') this.stepRandom()
+        for (const state of this.lfoStates) {
+            if (state.perVoice || state.trigger !== 'key' || !state.running) continue
+            const lfo = this.globalLFOs.get(state.id)
+            if (!lfo) continue
+            lfo.stop()
+            lfo.start()
+        }
     }
 
     /* -------------------------------------------------------------- */
@@ -304,6 +410,7 @@ export class SynthEngine {
             this.spreadGroup(group)
             this.sustained.delete(midi)
             for (const v of group) v.trigger(midi, velocity)
+            this.keyTrigger()
             return
         }
 
@@ -323,8 +430,13 @@ export class SynthEngine {
             this.groups.set(target, group)
             // legato re-pitches through the glide without restarting the
             // envelopes; mono restarts them on every key.
+            // legato deliberately doesn't restart envelopes, so it doesn't
+            // restart the key-triggered sources either.
             if (mode === 'legato') for (const v of group) v.retune(target)
-            else for (const v of group) v.trigger(target, velocity, true, true)
+            else {
+                for (const v of group) v.trigger(target, velocity, true, true)
+                this.keyTrigger()
+            }
             return
         }
 
@@ -333,6 +445,7 @@ export class SynthEngine {
         this.groups.set(target, group)
         this.spreadGroup(group)
         for (const v of group) v.trigger(target, velocity)
+        this.keyTrigger()
     }
 
     noteOff(midi: number) {
@@ -401,8 +514,21 @@ export class SynthEngine {
         for (const v of this.voices) v.setAmpEnv(state)
     }
 
-    applyModEnv(state: PatchState['modEnv']) {
+    applyModEnv(state: ModEnvState) {
         for (const v of this.voices) v.setModEnv(state)
+        // `key` is an ordinary one-shot envelope, so no clock runs at all.
+        if (state.trigger === 'sync') {
+            this.modEnvClock.stop()
+            this.modEnvLoop.interval = state.division
+            this.modEnvLoop.start(0)
+        } else if (state.trigger === 'free') {
+            this.modEnvLoop.stop()
+            this.modEnvClock.frequency.value = Math.max(state.rate, 0.01)
+            this.modEnvClock.start()
+        } else {
+            this.modEnvClock.stop()
+            this.modEnvLoop.stop()
+        }
     }
 
     applyVoice(state: VoiceState) {
@@ -432,6 +558,8 @@ export class SynthEngine {
         this.applyVoice(patch.voice)
         this.applyRandom(patch.random)
         this.applyLFOs(patch.lfos)
+        // Routes can target effect params, so the chain has to exist first.
+        this.applyFx(patch.fx)
         this.applyRoutes(patch.modRoutes)
     }
 
@@ -439,6 +567,10 @@ export class SynthEngine {
         this.pitchBend.dispose()
         this.randomClock.dispose()
         this.randomLoop.dispose()
+        this.modEnvClock.dispose()
+        this.modEnvLoop.dispose()
+        this.fx.dispose()
+        this.voiceBus.dispose()
         for (const lfo of this.globalLFOs.values()) lfo.dispose()
         this.globalLFOs.clear()
         for (const v of this.voices) v.dispose()

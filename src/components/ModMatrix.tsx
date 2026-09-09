@@ -3,6 +3,7 @@ import {
     addRoute,
     removeRoute,
     updateRoute,
+    useFx,
     useLFOs,
     useRoute,
     useRouteIds,
@@ -10,6 +11,7 @@ import {
     setParam,
 } from '../state/patchStore'
 import Selector from './controls/Selector'
+import TriggerTabs from './controls/TriggerTabs'
 import {
     DIVISIONS,
     LFO_RATE,
@@ -17,6 +19,9 @@ import {
     MOD_DESTINATIONS,
     MOD_SOURCE_IDS,
     MOD_SOURCE_META,
+    isRouteLive,
+    modDestinations,
+    type FxSlot,
     type LFOState,
 } from '../audio/patchTypes'
 
@@ -38,11 +43,15 @@ function sourceLabel(id: string, lfos: LFOState[]): string {
     return index === -1 ? 'missing LFO' : `LFO ${index + 1}`
 }
 
-function RouteRow({ id, lfos }: { id: string, lfos: LFOState[] }) {
+function RouteRow({ id, lfos, fx }: { id: string, lfos: LFOState[], fx: FxSlot[] }) {
     const route = useRoute(id)
     if (!route) return null
 
-    const meta = MOD_DESTINATIONS[route.destination]
+    const destinations = modDestinations(fx)
+    const meta = destinations[route.destination]
+    // The one way to build a route that can't do anything: a per-voice source
+    // aimed at an effect param, of which there is exactly one.
+    const live = isRouteLive(route, fx, lfos)
     // What this depth actually does, in the destination's own units.
     const amount = route.depth * (meta?.scale ?? 1)
     const readout = meta?.unit
@@ -76,11 +85,20 @@ function RouteRow({ id, lfos }: { id: string, lfos: LFOState[] }) {
             <select
                 value={route.destination}
                 onChange={e => updateRoute(id, { destination: e.target.value })}
-                style={{ ...select, minWidth: 130 }}
+                style={{ ...select, minWidth: 150 }}
             >
-                {Object.entries(MOD_DESTINATIONS).map(([key, d]) => (
-                    <option key={key} value={key}>{d.label}</option>
-                ))}
+                <optgroup label="Voice">
+                    {Object.keys(MOD_DESTINATIONS).map(key => (
+                        <option key={key} value={key}>{MOD_DESTINATIONS[key].label}</option>
+                    ))}
+                </optgroup>
+                {fx.length > 0 && (
+                    <optgroup label="Effects">
+                        {Object.entries(destinations)
+                            .filter(([, d]) => d.global)
+                            .map(([key, d]) => <option key={key} value={key}>{d.label}</option>)}
+                    </optgroup>
+                )}
             </select>
 
             <Knob
@@ -102,6 +120,13 @@ function RouteRow({ id, lfos }: { id: string, lfos: LFOState[] }) {
                 {sourceLabel(route.source, lfos)}
             </span>
 
+            {!live && (
+                <span style={{ fontSize: 9, color: '#ff8800' }}>
+                    inactive — an effect param is global, so it needs a source
+                    there is only one of
+                </span>
+            )}
+
             <button onClick={() => removeRoute(id)} style={{ fontSize: 10, color: '#ff4444' }}>✕</button>
         </div>
     )
@@ -110,6 +135,7 @@ function RouteRow({ id, lfos }: { id: string, lfos: LFOState[] }) {
 function ModMatrix() {
     const routeIds = useRouteIds()
     const lfos = useLFOs()
+    const fx = useFx()
     const random = useSection('random')
 
     return (
@@ -123,7 +149,7 @@ function ModMatrix() {
             </div>
 
             <div style={{ border: '1px solid #444', borderRadius: 8, padding: '4px 12px 12px' }}>
-                {routeIds.map(id => <RouteRow key={id} id={id} lfos={lfos} />)}
+                {routeIds.map(id => <RouteRow key={id} id={id} lfos={lfos} fx={fx} />)}
                 {routeIds.length === 0 && (
                     <span style={{ fontSize: 11, opacity: 0.4 }}>
                         No routes — add one to connect a source to a destination
@@ -137,29 +163,29 @@ function ModMatrix() {
                 display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
             }}>
                 <span style={{ fontSize: 11, opacity: 0.5, letterSpacing: 1 }}>RANDOM S&amp;H</span>
-                <div style={{ display: 'flex', gap: 4 }}>
-                    <button onClick={() => setParam('random', 'sync', false)}
-                        style={tab(!random.sync)}>free</button>
-                    <button onClick={() => setParam('random', 'sync', true)}
-                        style={tab(random.sync)}>sync</button>
-                </div>
-                {random.sync
-                    ? <Selector options={DIVISIONS} value={random.division}
+                <TriggerTabs
+                    value={random.trigger}
+                    onChange={t => setParam('random', 'trigger', t)}
+                    titles={{
+                        free: 'A new value on its own clock',
+                        key: 'A new value on each note-on, held for the note',
+                        sync: 'A new value every division of the transport',
+                    }}
+                />
+                {random.trigger === 'sync' && (
+                    <Selector options={DIVISIONS} value={random.division}
                         onChange={d => setParam('random', 'division', d)} color="#00aaff" />
-                    : <Knob label="Rate" min={LFO_RATE.min} max={LFO_RATE.max} value={random.rate}
-                        defaultValue={4} onChange={v => setParam('random', 'rate', v)} size={44} color="#ffff00" />}
+                )}
+                {random.trigger === 'free' && (
+                    <Knob label="Rate" min={LFO_RATE.min} max={LFO_RATE.max} value={random.rate}
+                        defaultValue={4} onChange={v => setParam('random', 'rate', v)} size={44} color="#ffff00" />
+                )}
+                {random.trigger === 'key' && (
+                    <span style={{ fontSize: 9, opacity: 0.4 }}>one value per note, held</span>
+                )}
             </div>
         </div>
     )
-}
-
-function tab(active: boolean): React.CSSProperties {
-    return {
-        fontSize: 9, padding: '2px 6px',
-        background: active ? '#00ff88' : '#333',
-        color: active ? '#000' : '#fff',
-        border: 'none', borderRadius: 3, cursor: 'pointer',
-    }
 }
 
 export default ModMatrix

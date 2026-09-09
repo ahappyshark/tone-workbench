@@ -14,6 +14,7 @@ import {
     savePreset,
 } from '../state/presetStorage'
 import { DEFAULT_PATCH } from '../audio/patchTypes'
+import { FACTORY_PRESETS, loadFactoryPreset } from '../presets/factory'
 
 const btn: React.CSSProperties = {
     fontSize: 11,
@@ -54,6 +55,16 @@ function PresetBar() {
         } else {
             setStatus('could not write to localStorage')
         }
+    }
+
+    // The factory bank is code, not localStorage: it can't be overwritten or
+    // deleted, and it always matches the current schema.
+    const handleLoadFactory = (preset: string) => {
+        if (!preset) return
+        const patch = loadFactoryPreset(preset)
+        if (!patch) return
+        loadPatch(patch)
+        setStatus(`loaded "${preset}"`)
     }
 
     const handleLoad = (preset: string) => {
@@ -105,6 +116,26 @@ function PresetBar() {
         }}>
             <span style={{ fontSize: 11, opacity: 0.5 }}>PRESET</span>
 
+            <select
+                value=""
+                onChange={e => handleLoadFactory(e.target.value)}
+                style={{
+                    background: '#222',
+                    color: '#fff',
+                    border: '1px solid #444',
+                    borderRadius: 4,
+                    padding: '4px 6px',
+                    fontSize: 11,
+                }}
+            >
+                <option value="">— factory —</option>
+                {FACTORY_PRESETS.map(p => (
+                    <option key={p.name} value={p.name} title={p.blurb}>{p.name}</option>
+                ))}
+            </select>
+
+            <span style={{ opacity: 0.3 }}>|</span>
+
             <input
                 value={name}
                 onChange={e => setPatchName(e.target.value)}
@@ -152,7 +183,7 @@ function PresetBar() {
                 style={{ display: 'none' }}
             />
 
-            <button style={btn} onClick={() => loadPatch({ ...DEFAULT_PATCH })}>Init</button>
+            <button style={btn} onClick={() => loadPatch(structuredClone(DEFAULT_PATCH))}>Init</button>
 
             {status && <span style={{ fontSize: 10, color: '#00ff88' }}>{status}</span>}
         </div>

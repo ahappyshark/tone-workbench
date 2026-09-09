@@ -42,9 +42,13 @@ it different, it belongs in `PatchState`, not in the code.**
                 │                      mod env    amp env                     │
                 └─────────────────────────────────────────────────────────────┘
                                                                                     │
-   voice bus ──▶ drive ──▶ chorus ──▶ delay ──▶ reverb ──▶ masterGain ──▶ limiter ──┘
-                 └───────────── effects chain (patch state) ─────────┘  └ master (not patch state)
+   voice bus ──▶ [ fx slot 0 ──▶ fx slot 1 ──▶ … ] ──▶ masterGain ──▶ limiter ──┘
+                 └── effects chain, ordered patch state ──┘  └ master (not patch state)
 ```
+
+The chain is an *array* rather than four fixed boxes, so reordering it is a
+data change — drive into reverb and reverb into drive are different sounds and
+the patch should be able to say which.
 
 Voices sum into one bus; effects are global, not per-voice. That is both
 cheaper and how most polysynths actually work — per-voice reverb is a niche
@@ -252,6 +256,13 @@ and units and simply move under `filter` and `ampEnv` — which *is* a rename, s
 that one needs a `version < 2` branch. Exactly the case OPEN-QUESTIONS #4
 flagged.
 
+Version 5 (phase 4) adds `fx[]` and the trigger modes. It contains the first
+field *replacement* rather than an addition: the LFO and S&H `sync: boolean`
+became `trigger: 'free' | 'key' | 'sync'`. Still no migration branch, because
+the mapping is lossless in the only direction that matters — a boolean could
+never mean `key`, so `sync: true → 'sync'` and `false → 'free'` recovers the
+old patch exactly. `coerceTrigger` reads whichever field it finds.
+
 ---
 
 ## Build order
@@ -263,10 +274,59 @@ Each phase should end with something audible.
 | 1 | ~~**Voice pool**~~ **DONE** | `Voice`, group allocator, stealing, unison/detune/spread, 2 osc + sub + noise, filter, amp + mod envelope. `Tone.PolySynth` is gone. | landed |
 | 2 | ~~**Mod matrix**~~ **DONE** | Routes, signed depth gains, `detune` routing, per-voice LFOs, velocity/key-track/mod-wheel/random sources, tempo sync. LFO target dropdown retired. | landed |
 | 3 | ~~**Playability**~~ **DONE** | Glide (mono/legato only), note priority, pitch bend, sustain pedal, keyboard octave shift. Velocity landed in phase 2. | landed |
-| 4 | **Effects chain** | Drive/waveshaper, chorus, delay, reverb, wet knobs, as patch state. | ~250 lines |
+| 4 | ~~**Effects chain**~~ **DONE** | Ordered slot rack: drive, chorus, delay, reverb. Per-slot bypass, reorder and type swap. Every audio-rate effect param is a matrix destination. Trigger modes (free/key/sync) for the LFOs, the S&H and the mod envelope came in alongside. | landed |
 | 5 | **Variants** | `Shark Ambient` and `Shark Aggro` preset packs. Generative sequencer for the ambient one (`SequencerPatch` and `ArpPatch` are the seed — OPEN-QUESTIONS #8). | data + one module |
 
 Phase 1 is the commitment; everything after is additive.
+
+---
+
+## Effects chain
+
+Four effects, one chain, `FxSlot[]` in signal order. A slot stores every
+effect's params whatever its current type is — the same trick `OscState` uses —
+so switching a slot to delay and back doesn't forget the chorus settings.
+
+**Which params are modulatable is a property of the effect, not a choice.**
+`Distortion.distortion` rebuilds a waveshaper curve on assignment and
+`Reverb.decay` re-renders an impulse response offline. Neither is an audio-rate
+param and neither can follow an LFO, so neither is offered as a destination.
+Reverb decay is additionally *debounced* before it is written, because a knob
+drag would otherwise fire one offline render per animation frame.
+
+**Effect params take modulation only from global sources.** There is one chain
+after the voices are summed, so an effect param is one value and a per-voice
+source is sixteen. `isRouteLive` is the shared rule and the matrix labels such
+a row inactive rather than letting it look wired. See OPEN-QUESTIONS #26.
+
+**Rewiring is the one thing here that clicks**, so it only happens when the
+shape of the chain changes — add, remove, bypass, reorder, retype. The chain
+signature is `id:type` rather than `id` precisely because retyping replaces the
+node in place: same order, different object, and a signature of ids alone would
+skip the rewire and leave the chain pointing at a node that was just disposed.
+
+---
+
+## Trigger modes
+
+One enum, `free | key | sync`, shared by the LFOs, the random S&H and the mod
+envelope, so the three can't grow three different words for the same idea.
+
+- **free** — runs off the audio clock, wherever it happens to be when you play.
+- **key** — restarts on note-on. This is what makes an attack repeatable; a
+  free LFO's contribution to the first 200ms of a note is luck.
+- **sync** — locked to the transport, advancing only while it runs.
+
+`key` and `sync` are mutually exclusive by construction rather than by a guard:
+a synced source's phase belongs to the transport, and restarting it is the one
+thing that would break the lock syncing exists to provide.
+
+For the mod envelope, `free` and `sync` mean *looping* — the attack re-fires on
+a clock while the note is held, turning the ADSR into a waveform you drew with
+four knobs. One clock in the engine drives all sixteen voices, so a looping
+envelope stays in phase across a chord instead of each note wandering off.
+`perVoice` on an LFO stays orthogonal: it decides how many LFOs there are, the
+trigger decides where their phase comes from.
 
 ---
 

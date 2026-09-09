@@ -1,5 +1,6 @@
 import Knob from './Knob'
 import Selector from './Selector'
+import TriggerTabs from './TriggerTabs'
 import { removeLFO, updateLFO, useLFOState } from '../../state/patchStore'
 import { DIVISIONS, LFO_RATE, WAVES } from '../../audio/patchTypes'
 
@@ -42,23 +43,24 @@ function LFOModule({ id, routeCount }: LFOModuleProps) {
 
       <Selector options={WAVES} value={state.waveform} onChange={w => updateLFO(id, { waveform: w })} />
 
-      <div style={{ display: 'flex', gap: 4 }}>
-        <button
-          onClick={() => updateLFO(id, { sync: false })}
-          style={tab(!state.sync, '#00ff88')}
-        >free</button>
-        <button
-          onClick={() => updateLFO(id, { sync: true })}
-          style={tab(state.sync, '#00ff88')}
-        >sync</button>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <TriggerTabs
+          value={state.trigger}
+          onChange={t => updateLFO(id, { trigger: t })}
+          titles={{
+            free: 'Runs continuously — wherever it happens to be when you play',
+            key: 'Phase restarts on every note-on, so the attack is repeatable',
+            sync: 'Rate locked to transport tempo; advances only while it runs',
+          }}
+        />
         <button
           onClick={() => updateLFO(id, { perVoice: !state.perVoice })}
           style={tab(state.perVoice, '#aa44ff')}
-          title="One LFO per voice, restarted on each note, so notes drift independently"
+          title="One LFO per voice, so notes drift independently"
         >per-voice</button>
       </div>
 
-      {state.sync
+      {state.trigger === 'sync'
         ? <>
             <Selector options={DIVISIONS} value={state.division}
               onChange={d => updateLFO(id, { division: d })} color="#00aaff" />
@@ -68,6 +70,12 @@ function LFOModule({ id, routeCount }: LFOModuleProps) {
             <Knob label="Rate" min={LFO_RATE.min} max={LFO_RATE.max} value={state.rate}
               defaultValue={1} onChange={v => updateLFO(id, { rate: v })} size={48} color="#00ff88" />
           </div>}
+
+      {state.trigger === 'key' && !state.perVoice && (
+        <span style={{ fontSize: 9, opacity: 0.4, textAlign: 'center' }}>
+          shared — every note resets it for all of them
+        </span>
+      )}
 
       <span style={{ fontSize: 9, opacity: 0.4, textAlign: 'center' }}>
         {routeCount === 0

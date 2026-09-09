@@ -1,12 +1,15 @@
 import type { ReactNode } from 'react'
 import Knob from './controls/Knob'
 import Selector from './controls/Selector'
+import TriggerTabs from './controls/TriggerTabs'
 import { setParam, useSection } from '../state/patchStore'
 import { useSynthEngine } from '../hooks/useSynthEngine'
 import { POLYPHONY } from '../audio/synthEngine'
 import {
     DEFAULT_PATCH,
+    DIVISIONS,
     ENV_RANGES,
+    LFO_RATE,
     FILTER_RANGES,
     FILTER_TYPES,
     NOISE_RANGES,
@@ -99,12 +102,19 @@ function OscPanel({ which }: { which: 'oscA' | 'oscB' }) {
     )
 }
 
-function EnvPanel({ which, title, color }: { which: 'ampEnv' | 'modEnv', title: string, color: string }) {
+function EnvPanel({ which, title, color, note, extra }: {
+    which: 'ampEnv' | 'modEnv'
+    title: string
+    color: string
+    note?: string
+    extra?: ReactNode
+}) {
     const env = useSection(which)
     const d = DEFAULT_PATCH[which]
     const set = <K extends keyof EnvState>(key: K) => (v: EnvState[K]) => setParam(which, key, v)
     return (
-        <Section title={title}>
+        <Section title={title} note={note}>
+            {extra}
             <div style={row}>
                 <Knob label="Attack" min={ENV_RANGES.attack.min} max={ENV_RANGES.attack.max}
                     value={env.attack} defaultValue={d.attack} onChange={set('attack')} size={48} color={color} />
@@ -116,6 +126,37 @@ function EnvPanel({ which, title, color }: { which: 'ampEnv' | 'modEnv', title: 
                     value={env.release} defaultValue={d.release} onChange={set('release')} size={48} color={color} />
             </div>
         </Section>
+    )
+}
+
+/**
+ * How the mod envelope repeats. `free` and `sync` re-fire the attack on a
+ * clock while a note is held, which turns the ADSR into a looping shape — an
+ * LFO whose waveform you drew with four knobs.
+ */
+function ModEnvTrigger() {
+    const modEnv = useSection('modEnv')
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <TriggerTabs
+                value={modEnv.trigger}
+                onChange={t => setParam('modEnv', 'trigger', t)}
+                titles={{
+                    free: 'One shot per note, then loops at its own rate while held',
+                    key: 'One shot per note — an ordinary envelope',
+                    sync: 'Loops on a division of the transport while a note is held',
+                }}
+            />
+            {modEnv.trigger === 'free' && (
+                <Knob label="Loop" min={LFO_RATE.min} max={LFO_RATE.max} value={modEnv.rate}
+                    defaultValue={DEFAULT_PATCH.modEnv.rate}
+                    onChange={v => setParam('modEnv', 'rate', v)} size={40} color="#aa44ff" />
+            )}
+            {modEnv.trigger === 'sync' && (
+                <Selector options={DIVISIONS} value={modEnv.division}
+                    onChange={d => setParam('modEnv', 'division', d)} color="#00aaff" />
+            )}
+        </div>
     )
 }
 
@@ -180,7 +221,13 @@ function SynthPanel() {
                 </Section>
 
                 <EnvPanel which="ampEnv" title="AMP ENV" color="#00ff88" />
-                <EnvPanel which="modEnv" title="MOD ENV → FILTER" color="#aa44ff" />
+                <EnvPanel
+                    which="modEnv"
+                    title="MOD ENV"
+                    color="#aa44ff"
+                    note="filter env amt + matrix"
+                    extra={<ModEnvTrigger />}
+                />
 
                 <Section title="VOICE" note={`${notes} note${notes === 1 ? '' : 's'} of ${POLYPHONY}`}>
                     <Selector options={VOICE_MODES} value={voice.mode} onChange={v => setParam('voice', 'mode', v)} />

@@ -1,8 +1,11 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import {
     DEFAULT_PATCH,
+    createFx,
     createLFO,
     createRoute,
+    type FxParams,
+    type FxSlot,
     type LFOState,
     type ModRoute,
     type PatchState,
@@ -84,6 +87,63 @@ export function removeLFO(id: string) {
     })
 }
 
+/* ------------------------------------------------------------------ */
+/* Effects                                                             */
+/* ------------------------------------------------------------------ */
+
+export function addFx(): string {
+    let id = `fx-${Date.now().toString(36)}`
+    let n = 0
+    while (patch.fx.some(f => f.id === id)) id = `fx-${Date.now().toString(36)}-${n++}`
+    setPatch({ ...patch, fx: [...patch.fx, createFx(id)] })
+    return id
+}
+
+export function removeFx(id: string) {
+    if (!patch.fx.some(f => f.id === id)) return
+    // Routes aimed at this slot's params would point at nothing.
+    setPatch({
+        ...patch,
+        fx: patch.fx.filter(f => f.id !== id),
+        modRoutes: patch.modRoutes.filter(r => !r.destination.startsWith(`fx:${id}:`)),
+    })
+}
+
+export function updateFx(id: string, changes: Partial<Omit<FxSlot, 'id' | 'params'>>) {
+    const current = patch.fx.find(f => f.id === id)
+    if (!current) return
+    const keys = Object.keys(changes) as (keyof typeof changes)[]
+    if (keys.every(k => current[k] === changes[k])) return
+    // Changing type changes which params exist, so routes into the old ones go.
+    const routes = changes.type && changes.type !== current.type
+        ? patch.modRoutes.filter(r => !r.destination.startsWith(`fx:${id}:`))
+        : patch.modRoutes
+    setPatch({
+        ...patch,
+        fx: patch.fx.map(f => (f.id === id ? { ...f, ...changes } : f)),
+        modRoutes: routes,
+    })
+}
+
+export function setFxParam<K extends keyof FxParams>(id: string, key: K, value: FxParams[K]) {
+    const current = patch.fx.find(f => f.id === id)
+    if (!current || current.params[key] === value) return
+    setPatch({
+        ...patch,
+        fx: patch.fx.map(f => (f.id === id ? { ...f, params: { ...f.params, [key]: value } } : f)),
+    })
+}
+
+/** Move a slot one place along the chain. Order is the signal path. */
+export function moveFx(id: string, delta: -1 | 1) {
+    const index = patch.fx.findIndex(f => f.id === id)
+    const target = index + delta
+    if (index === -1 || target < 0 || target >= patch.fx.length) return
+    const next = [...patch.fx]
+    ;[next[index], next[target]] = [next[target], next[index]]
+    setPatch({ ...patch, fx: next })
+}
+
 export function addRoute(): string {
     let id = `route-${Date.now().toString(36)}`
     let n = 0
@@ -135,6 +195,21 @@ export function useLFOState(id: string): LFOState | undefined {
 export function useLFOIds(): string[] {
     const key = useSyncExternalStore(subscribe, () => patch.lfos.map(l => l.id).join(','))
     return useMemo(() => (key ? key.split(',') : []), [key])
+}
+
+export function useFxSlot(id: string): FxSlot | undefined {
+    return useSyncExternalStore(subscribe, () => patch.fx.find(f => f.id === id))
+}
+
+/** Ids only, so a knob inside one slot doesn't re-render the whole rack. */
+export function useFxIds(): string[] {
+    const key = useSyncExternalStore(subscribe, () => patch.fx.map(f => f.id).join(','))
+    return useMemo(() => (key ? key.split(',') : []), [key])
+}
+
+/** The full chain — for the engine bridge and the matrix's destination list. */
+export function useFx(): FxSlot[] {
+    return useSyncExternalStore(subscribe, () => patch.fx)
 }
 
 export function useRoute(id: string): ModRoute | undefined {

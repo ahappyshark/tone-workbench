@@ -93,16 +93,23 @@ The first migration will be the first schema change made *after* real presets
 exist. Keep the version field bumping honestly until then, so that when the day
 comes the branch has something to key on.
 
-### 5. Factory presets — **OPEN**
+### 5. Factory presets — **DONE**
 
-Nothing ships with the app; first run is always `Init`. A `src/presets/*.json`
-set loaded into the bank on first boot would give the workbench something to
-make noise with immediately, and doubles as regression fixtures.
+Eight ship in `src/presets/factory.ts`, behind their own dropdown in the preset
+bar. They are *code*, not a localStorage seed, which settles the sub-question
+this entry didn't ask: a seeded bank can be overwritten or deleted, and then
+"load the factory patch" stops being a thing you can do. The factory bank can
+only be loaded from.
 
-Now upgraded in importance: `SYNTH-DESIGN.md` makes the two planned variants
-(**Shark Ambient**, **Shark Aggro**) *preset packs on one engine* rather than
-forks of the code, so the factory-preset mechanism is how variants ship at all.
-Blocked until phase 1 lands, since the schema is about to change shape.
+Each preset is a sparse override of `DEFAULT_PATCH` run through `coercePatch`,
+so it states only what it changes and inherits sensible values for anything
+added later. That also makes the bank a coercion fixture: if `coercePatch`
+regresses, the presets stop loading.
+
+Still open, deliberately: they are one flat list, not the two named variant
+packs (**Shark Ambient**, **Shark Aggro**) that `SYNTH-DESIGN.md` phase 5 calls
+for. Several lean each way — `Drift Pad` and `Deep Space` against `Aggro Bass`
+and `Siren Lead` — which is the evidence question 17 wanted.
 
 ### 6. Save silently overwrites — **OPEN**
 
@@ -110,12 +117,16 @@ Blocked until phase 1 lands, since the schema is about to change shape.
 workbench, mildly annoying the first time it eats a patch. Also: the bank is
 flat and unsorted-by-use — no tags, folders, or categories.
 
-### 7. Is the master chain part of the patch? — **OPEN**
+### 7. Is the master chain part of the patch? — **DECIDED**
 
 `audio/master.ts` hardcodes `Gain(0.8) → Limiter(-6) → destination`. Not
-exposed, not registered as a modulation target, not saved in presets. Probably
-correct — master is a mixer setting, not a patch setting — but if any master
-effects ever land (see the synth expansion), they *are* patch state.
+exposed, not a modulation target, not saved in presets.
+
+Phase 4 settled it by drawing the line somewhere else than this entry expected.
+The effects that landed are *patch* state — an ordered `fx` array, saved,
+loaded and modulatable — and they sit before the master, not in it. So master
+stays a mixer setting: output level and a safety limiter, the two things that
+should not change when you load a preset.
 
 ---
 
@@ -292,11 +303,16 @@ moves the measured brightness from 4.9 to 28.2 between a soft and a hard
 note — the difference between an instrument that responds to playing and one
 that doesn't.
 
-### 21. Synced sources need the transport running — **OPEN**
+### 21. Synced sources need the transport running — **OPEN (wider now)**
 
 An LFO or S&H in `sync` mode is scheduled on the transport, so it sits still
 until Play is pressed. That is what locking to tempo *means*, and both panels
 say so, but it will still read as "my LFO is broken" the first time.
+
+Phase 4 added a third source with the same property — the mod envelope's `sync`
+loop — and one factory preset (`Cascade`) that is built around it, so the
+blurb tells you to start the transport. That is a hint in a tooltip doing a
+job the UI should probably do.
 
 Options if it grates: auto-start the transport when a synced source exists;
 show a warning when something is synced and the transport is stopped; or free
@@ -352,3 +368,40 @@ A–K covered one octave, which isn't enough to play a bassline and a lead on th
 same patch. Z and X shift by octave, clamped to ±3, with the current range
 shown next to the title. Keys track the note they actually started, so a shift
 mid-note releases the right pitch instead of hanging it.
+
+### 25. Delay time can't follow the tempo — **DEFERRED**
+
+Every other synced thing in the patch locks to the transport, but the delay's
+time knob is in seconds only. The reason is specific rather than lazy: the
+transport's `bpm` is a `Param`, and a Param is not a source — nothing can be
+connected *out* of it — so there is no signal to drive the delay time with.
+
+Every workable version needs a BPM *change* to reach the engine:
+
+1. Move BPM into `PatchState` and out of `TransportControls`. Honest, and it
+   makes tempo part of a preset, which is arguably right for a workbench.
+2. Poll `Tone.getTransport().bpm.value` on a `Tone.Loop` and rewrite the delay
+   time when it moves. Cheap, slightly grubby.
+3. Give the engine a `setTempo` and have the transport controls call it. Small,
+   but it puts a second owner on a value the transport already holds.
+
+(1) is probably right and is a small change; it just isn't phase 4's change.
+Until then `division → seconds` would silently stop tracking the tempo, which
+is worse than not offering it.
+
+### 26. Effect params can only be modulated by global sources — **DECIDED**
+
+There is one effects chain, after the voices are summed, so an effect param is
+a single value. A per-voice source is sixteen values. There is no honest answer
+to which voice's mod envelope sets the delay time, so those routes are simply
+not connected.
+
+`isRouteLive` is the shared rule, and the matrix prints "inactive" on such a
+row rather than letting it sit there looking wired. The alternative — summing
+all sixteen voices into the param — was rejected: it makes depth mean something
+different depending on how many notes are held, which is exactly the
+"modulation depth that changes meaning" problem the `detune` decision above
+exists to avoid.
+
+If per-voice effects are ever wanted, that's a different design (see
+`SYNTH-DESIGN.md`, "deliberately not doing"), not a fix to this rule.
